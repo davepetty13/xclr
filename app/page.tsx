@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { isOnboarded } from "@/lib/onboarding";
+import { hasActiveProgram } from "@/lib/programs";
 
 export default async function Home() {
   const supabase = createClient();
@@ -17,6 +18,9 @@ export default async function Home() {
 
   // Fresh account (profile seeded with only a name) → send through onboarding.
   if (!isOnboarded(profile)) redirect("/onboarding");
+
+  // Onboarded but no program yet → build one (also the existing-user path).
+  if (!(await hasActiveProgram(supabase, user.id))) redirect("/program");
 
   const name = profile?.display_name ?? user.email;
 
