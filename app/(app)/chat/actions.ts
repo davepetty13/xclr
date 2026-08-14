@@ -277,7 +277,9 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
     try {
       const coach = await anthropic().messages.create({
         model: PROGRAM_MODEL,
-        max_tokens: 600,
+        // Headroom for adaptive thinking (on by default) + the short reply, so
+        // the visible text isn't starved by the thinking budget.
+        max_tokens: 1500,
         system: buildCoachSystemPrompt(ctx),
         output_config: { effort: "low" },
         messages: [{ role: "user", content: clean }],
