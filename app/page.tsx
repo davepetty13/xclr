@@ -1,18 +1,24 @@
+import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { isOnboarded } from "@/lib/onboarding";
 
 export default async function Home() {
   const supabase = createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  if (!user) redirect("/login");
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("display_name")
-    .eq("id", user!.id)
+    .select("display_name, height_cm")
+    .eq("id", user.id)
     .single();
 
-  const name = profile?.display_name ?? user!.email;
+  // Fresh account (profile seeded with only a name) → send through onboarding.
+  if (!isOnboarded(profile)) redirect("/onboarding");
+
+  const name = profile?.display_name ?? user.email;
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-paper px-6">
@@ -24,7 +30,7 @@ export default async function Home() {
           Signed in as <em className="italic text-green">{name}</em>
         </h1>
         <p className="mt-3 text-sm font-medium text-muted">
-          Foundation checkpoint — onboarding arrives in Session B.
+          You&apos;re all set. Your Today dashboard arrives in a later session.
         </p>
         <form action="/auth/signout" method="post" className="mt-8">
           <button
