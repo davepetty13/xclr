@@ -3,9 +3,17 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { WizardShell } from "./wizard-shell";
-import { Chip, FieldLabel, OptionCard, Segmented, Stepper, TextField } from "./controls";
+import {
+  AutoGrowTextarea,
+  Chip,
+  FieldLabel,
+  OptionCard,
+  Segmented,
+  Stepper,
+  TextField,
+} from "./controls";
 import { computeBmi, bmiBand, BMI_BAND_LABEL } from "@/lib/bmi";
-import { lbsToKg } from "@/lib/units";
+import { cmToFtIn, ftInToCm, lbsToKg } from "@/lib/units";
 import type { OnboardingPayload } from "@/lib/onboarding";
 import { submitOnboarding } from "@/app/onboarding/actions";
 import {
@@ -25,7 +33,10 @@ type Draft = {
   display_name: string;
   sex: string | null;
   birthdate: string;
-  height_cm: string;
+  height_cm: string; // canonical value, always cm
+  height_unit: "cm" | "ftin"; // input mode only — not stored
+  height_ft: string;
+  height_in: string;
   weight_unit: "kg" | "lbs";
   current_weight: string;
   goal_weight: string;
@@ -51,6 +62,9 @@ export function OnboardingWizard({ initialName }: { initialName: string }) {
     sex: null,
     birthdate: "",
     height_cm: "",
+    height_unit: "cm",
+    height_ft: "",
+    height_in: "",
     weight_unit: "kg",
     current_weight: "",
     goal_weight: "",
@@ -149,6 +163,43 @@ export function OnboardingWizard({ initialName }: { initialName: string }) {
   // ---- Step 1: height (+ optional sex / birthdate) ----
   if (step === 1) {
     const ok = Number.isFinite(heightNum) && heightNum >= 80 && heightNum <= 260;
+    const round1 = (n: number) => Math.round(n * 10) / 10;
+
+    // height_cm is always the canonical stored value; ft/in is display-only.
+    const switchHeightUnit = (unit: "cm" | "ftin") => {
+      if (unit === data.height_unit) return;
+      if (unit === "ftin") {
+        const cm = Number(data.height_cm);
+        if (Number.isFinite(cm) && cm > 0) {
+          const { feet, inches } = cmToFtIn(cm);
+          let ft = feet;
+          let inch = round1(inches);
+          if (inch >= 12) {
+            ft += 1;
+            inch = 0;
+          }
+          update({ height_unit: unit, height_ft: String(ft), height_in: String(inch) });
+        } else {
+          update({ height_unit: unit });
+        }
+      } else {
+        // ftin -> cm: height_cm is already maintained, nothing to convert.
+        update({ height_unit: unit });
+      }
+    };
+
+    const cmFromFtIn = (ftStr: string, inStr: string): string => {
+      if (!ftStr && !inStr) return "";
+      const ft = Number(ftStr);
+      const inch = Number(inStr);
+      if (!Number.isFinite(ft) || !Number.isFinite(inch)) return data.height_cm;
+      return String(round1(ftInToCm(ft || 0, inch || 0)));
+    };
+    const setFeet = (v: string) =>
+      update({ height_ft: v, height_cm: cmFromFtIn(v, data.height_in) });
+    const setInches = (v: string) =>
+      update({ height_in: v, height_cm: cmFromFtIn(data.height_ft, v) });
+
     return (
       <WizardShell
         step={step}
@@ -161,15 +212,51 @@ export function OnboardingWizard({ initialName }: { initialName: string }) {
       >
         <div>
           <FieldLabel>Height</FieldLabel>
-          <TextField
-            value={data.height_cm}
-            onChange={(v) => update({ height_cm: v })}
-            placeholder="170"
-            inputMode="decimal"
-            suffix="cm"
-            autoFocus
-            ariaLabel="Height in centimeters"
-          />
+          <div className="space-y-3">
+            <Segmented
+              options={[
+                { value: "cm", label: "cm" },
+                { value: "ftin", label: "ft / in" },
+              ]}
+              value={data.height_unit}
+              onChange={switchHeightUnit}
+            />
+            {data.height_unit === "cm" ? (
+              <TextField
+                value={data.height_cm}
+                onChange={(v) => update({ height_cm: v })}
+                placeholder="170"
+                inputMode="decimal"
+                suffix="cm"
+                autoFocus
+                ariaLabel="Height in centimeters"
+              />
+            ) : (
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <TextField
+                    value={data.height_ft}
+                    onChange={setFeet}
+                    placeholder="5"
+                    inputMode="numeric"
+                    suffix="ft"
+                    autoFocus
+                    ariaLabel="Height, feet"
+                  />
+                </div>
+                <div className="flex-1">
+                  <TextField
+                    value={data.height_in}
+                    onChange={setInches}
+                    placeholder="7"
+                    inputMode="decimal"
+                    suffix="in"
+                    ariaLabel="Height, inches"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         <div>
           <FieldLabel>Sex (optional)</FieldLabel>
@@ -481,13 +568,13 @@ export function OnboardingWizard({ initialName }: { initialName: string }) {
           <div className="space-y-3">
             {data.medical_conditions.map((c, i) => (
               <div key={i} className="space-y-2 rounded-tile border border-line bg-card p-3">
-                <TextField
+                <AutoGrowTextarea
                   value={c.condition}
                   onChange={(v) => setCondition(i, { condition: v })}
                   placeholder="e.g. wrist issue"
                   ariaLabel={`Condition ${i + 1}`}
                 />
-                <TextField
+                <AutoGrowTextarea
                   value={c.notes}
                   onChange={(v) => setCondition(i, { notes: v })}
                   placeholder="Notes (optional) — e.g. avoid heavy pressing"

@@ -23,7 +23,16 @@ export const SPORTS = [
   { value: "cycling", label: "Cycling" },
   { value: "swimming", label: "Swimming" },
   { value: "basketball", label: "Basketball" },
+  { value: "volleyball", label: "Volleyball" },
+  { value: "badminton", label: "Badminton" },
+  { value: "boxing_muay_thai", label: "Boxing / Muay Thai" },
+  { value: "football", label: "Football" },
+  { value: "tennis", label: "Tennis" },
+  { value: "golf", label: "Golf" },
+  { value: "hiking", label: "Hiking" },
   { value: "yoga", label: "Yoga" },
+  { value: "dance_zumba", label: "Dance / Zumba" },
+  { value: "martial_arts", label: "Martial Arts" },
 ] as const;
 
 export const SESSION_MINUTE_OPTIONS = [30, 45, 60, 75, 90] as const;

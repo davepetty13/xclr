@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 
 export function FieldLabel({ children }: { children: ReactNode }) {
   return (
@@ -44,6 +44,43 @@ export function TextField({
           {suffix}
         </span>
       ) : null}
+    </div>
+  );
+}
+
+// A textarea that grows with its content — wraps and expands, never scrolls
+// internally. Used for medical condition + note entry.
+export function AutoGrowTextarea({
+  value,
+  onChange,
+  placeholder,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  ariaLabel?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
+
+  return (
+    <div className="rounded-chip border border-line bg-paper px-4 py-3 focus-within:border-green">
+      <textarea
+        ref={ref}
+        rows={1}
+        value={value}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        onChange={(e) => onChange(e.target.value)}
+        className="block w-full resize-none overflow-hidden bg-transparent text-lg font-medium leading-relaxed text-ink outline-none placeholder:text-faint"
+      />
     </div>
   );
 }
