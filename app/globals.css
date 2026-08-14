@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Xclr design tokens (Master Spec §13). Hex values live ONLY here —
+   components reference tokens via Tailwind theme or var(--…). */
+:root {
+  --paper: #f6f3ec;
+  --card: #ffffff;
+  --ink: #16211b;
+  --muted: #6e7a72;
+  --faint: #9aa49c;
+  --line: #ece7dc;
+  --green: #1e7a4d; /* nutrition / intake / progress */
+  --green-soft: #e5f1ea;
+  --ember: #e0603a; /* activity / burn / attention */
+  --ember-soft: #f9e9e1;
+  --amber: #e0a11b; /* carbs */
+  --violet: #7c6bd6; /* fat / sleep */
+
+  /* shape & elevation (from approved mock) */
+  --radius-card: 26px;
+  --radius-tile: 20px;
+  --radius-chip: 16px;
+  --shadow-card: 0 12px 30px -20px rgba(22, 33, 27, 0.25);
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular numerals for all metrics (Spec §13) */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
