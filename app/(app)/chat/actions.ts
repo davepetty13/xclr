@@ -1,0 +1,299 @@
+"use server";
+
+import { createClient } from "@/lib/supabase/server";
+import { anthropic, PROGRAM_MODEL } from "@/lib/anthropic";
+import { PARSE_JSON_SCHEMA, normalizeParse, type ParsedFood } from "@/lib/parse-schema";
+import {
+  PARSE_SYSTEM_PROMPT,
+  buildCoachSystemPrompt,
+  type CoachContext,
+  type CoachPersona,
+} from "@/lib/chat-prompts";
+import { resolveExerciseIds } from "@/lib/exercises";
+
+export type FoodCard = {
+  id: string;
+  name: string;
+  serving: string | null;
+  meal: string | null;
+  kcal: number | null;
+  protein_g: number | null;
+  is_estimate: boolean;
+};
+
+export type ChatResult =
+  | {
+      ok: true;
+      reply: string;
+      cards: FoodCard[];
+      kcal_today: number;
+      protein_today: number;
+    }
+  | { ok: false; error: string };
+
+// "Today" as a UTC day window. Good enough for v1; a timezone-aware window can
+// come later without touching stored data (logged_at stays a full timestamp).
+function todayStartISO(): string {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+function todayDateISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export async function sendChatMessage(text: string): Promise<ChatResult> {
+  const clean = (text ?? "").trim();
+  if (!clean) return { ok: false, error: "Say something to log." };
+
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "You're signed out — sign in again." };
+
+  // ---- 1. Parse (separate call — the parser logs, the coach coaches). ----
+  let parsed;
+  try {
+    const msg = await anthropic().messages.create({
+      model: PROGRAM_MODEL,
+      max_tokens: 2000,
+      system: PARSE_SYSTEM_PROMPT,
+      output_config: {
+        effort: "low",
+        format: { type: "json_schema", schema: PARSE_JSON_SCHEMA },
+      },
+      messages: [{ role: "user", content: clean }],
+    });
+    if (msg.stop_reason === "refusal")
+      return { ok: false, error: "I couldn't read that — try rephrasing." };
+    const t = msg.content.find((b) => b.type === "text");
+    if (!t || t.type !== "text")
+      return { ok: false, error: "I couldn't read that — try again." };
+    parsed = normalizeParse(JSON.parse(t.text));
+  } catch {
+    return { ok: false, error: "Couldn't reach the coach — try again in a moment." };
+  }
+
+  const justLogged: string[] = [];
+  const cards: FoodCard[] = [];
+
+  // ---- 2. Anti-fabrication: vague input → write NOTHING (Spec §10). ----
+  if (!parsed.needs_clarification) {
+    // Foods — check the personal library first (their confirmed numbers win).
+    if (parsed.foods.length) {
+      const { data: lib } = await supabase
+        .from("food_library")
+        .select("id, name, serving, kcal, protein_g, carbs_g, fat_g, times_logged")
+        .eq("user_id", user.id);
+      const libByLower = new Map<string, Record<string, unknown>>();
+      for (const row of lib ?? [])
+        libByLower.set((row.name as string).toLowerCase(), row);
+
+      const rows = parsed.foods.map((f: ParsedFood) => {
+        const known = libByLower.get(f.name.toLowerCase());
+        if (known) {
+          return {
+            user_id: user.id,
+            logged_at: new Date().toISOString(),
+            meal: f.meal,
+            name: known.name as string,
+            serving: (known.serving as string | null) ?? f.serving,
+            kcal: known.kcal as number | null,
+            protein_g: known.protein_g as number | null,
+            carbs_g: known.carbs_g as number | null,
+            fat_g: known.fat_g as number | null,
+            source: "library",
+            is_estimate: false,
+          };
+        }
+        return {
+          user_id: user.id,
+          logged_at: new Date().toISOString(),
+          meal: f.meal,
+          name: f.name,
+          serving: f.serving,
+          kcal: f.kcal,
+          protein_g: f.protein_g,
+          carbs_g: f.carbs_g,
+          fat_g: f.fat_g,
+          source: "chat",
+          is_estimate: f.is_estimate,
+        };
+      });
+
+      const { data: inserted } = await supabase
+        .from("food_logs")
+        .insert(rows)
+        .select("id, name, serving, meal, kcal, protein_g, is_estimate");
+      for (const row of inserted ?? []) {
+        cards.push({
+          id: row.id as string,
+          name: row.name as string,
+          serving: (row.serving as string | null) ?? null,
+          meal: (row.meal as string | null) ?? null,
+          kcal: (row.kcal as number | null) ?? null,
+          protein_g: (row.protein_g as number | null) ?? null,
+          is_estimate: (row.is_estimate as boolean) ?? true,
+        });
+        justLogged.push(
+          `${row.name}${row.kcal != null ? ` ~${Math.round(row.kcal as number)} kcal` : ""}`
+        );
+      }
+
+      // Bump times_logged for any dish drawn from the library.
+      for (const f of parsed.foods) {
+        const known = libByLower.get(f.name.toLowerCase());
+        if (known)
+          await supabase
+            .from("food_library")
+            .update({ times_logged: ((known.times_logged as number) ?? 1) + 1 })
+            .eq("id", known.id as string);
+      }
+    }
+
+    // Weight → today's row (metric only).
+    if (parsed.weight_kg != null) {
+      await supabase
+        .from("weights")
+        .upsert(
+          { user_id: user.id, measured_on: todayDateISO(), kg: parsed.weight_kg },
+          { onConflict: "user_id,measured_on" }
+        );
+      justLogged.push(`weight ${parsed.weight_kg}kg`);
+    }
+
+    // Sleep → today's row.
+    if (parsed.sleep) {
+      await supabase.from("sleep_logs").upsert(
+        {
+          user_id: user.id,
+          slept_on: todayDateISO(),
+          duration_min: parsed.sleep.duration_min,
+          quality: parsed.sleep.quality,
+          source: "chat",
+        },
+        { onConflict: "user_id,slept_on" }
+      );
+      justLogged.push("sleep");
+    }
+
+    // Workout → session + set_logs (completes the §10 mapping).
+    if (parsed.workout) {
+      const { data: session } = await supabase
+        .from("workout_sessions")
+        .insert({ user_id: user.id, type: parsed.workout.type, performed_at: new Date().toISOString() })
+        .select("id")
+        .single();
+      if (session) {
+        const ids = await resolveExerciseIds(
+          supabase,
+          user.id,
+          parsed.workout.sets.map((s) => ({ name: s.exercise }))
+        );
+        const perExercise = new Map<string, number>();
+        const setRows = parsed.workout.sets
+          .map((s) => {
+            const exId = ids.get(s.exercise.toLowerCase());
+            if (!exId) return null;
+            const idx = (perExercise.get(exId) ?? 0) + 1;
+            perExercise.set(exId, idx);
+            return {
+              user_id: user.id,
+              session_id: session.id as string,
+              exercise_id: exId,
+              set_index: idx,
+              actual_load_value: s.load_value,
+              actual_load_type: s.load_type,
+              actual_reps: s.reps,
+              actual_rpe: s.rpe,
+            };
+          })
+          .filter((r): r is NonNullable<typeof r> => r !== null);
+        if (setRows.length) await supabase.from("set_logs").insert(setRows);
+        justLogged.push(`${parsed.workout.type ?? "workout"} logged`);
+      }
+    }
+  }
+
+  // ---- 3. Coach reply (separate call, §2c) with grounded context. ----
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select(
+      "display_name, primary_goal, daily_calorie_target, daily_protein_target, coach_persona, health_data_consent_at"
+    )
+    .eq("id", user.id)
+    .single();
+
+  const { data: todayFoods } = await supabase
+    .from("food_logs")
+    .select("kcal, protein_g")
+    .eq("user_id", user.id)
+    .gte("logged_at", todayStartISO());
+  const kcalToday = (todayFoods ?? []).reduce((s, r) => s + (Number(r.kcal) || 0), 0);
+  const proteinToday = (todayFoods ?? []).reduce(
+    (s, r) => s + (Number(r.protein_g) || 0),
+    0
+  );
+
+  const { data: recentWeights } = await supabase
+    .from("weights")
+    .select("measured_on, kg")
+    .eq("user_id", user.id)
+    .order("measured_on", { ascending: false })
+    .limit(7);
+  const weightToday =
+    (recentWeights ?? []).find((w) => w.measured_on === todayDateISO())?.kg ?? null;
+
+  let medical: string[] = [];
+  if (profile?.health_data_consent_at) {
+    const { data: conds } = await supabase
+      .from("medical_conditions")
+      .select("condition")
+      .eq("user_id", user.id)
+      .eq("active", true);
+    medical = (conds ?? []).map((c) => c.condition as string);
+  }
+
+  const ctx: CoachContext = {
+    persona: (profile?.coach_persona as CoachPersona) ?? {},
+    display_name: profile?.display_name ?? "there",
+    primary_goal: profile?.primary_goal ?? "general_health",
+    calorie_target: Number(profile?.daily_calorie_target) || 2200,
+    protein_target: Number(profile?.daily_protein_target) || 150,
+    kcal_today: kcalToday,
+    protein_today: proteinToday,
+    weight_today_kg: weightToday != null ? Number(weightToday) : null,
+    recent_weights: (recentWeights ?? []).map((w) => ({
+      measured_on: w.measured_on as string,
+      kg: Number(w.kg),
+    })),
+    medical,
+    just_logged: justLogged,
+  };
+
+  let reply = parsed.needs_clarification ?? "";
+  if (!reply) {
+    try {
+      const coach = await anthropic().messages.create({
+        model: PROGRAM_MODEL,
+        max_tokens: 600,
+        system: buildCoachSystemPrompt(ctx),
+        output_config: { effort: "low" },
+        messages: [{ role: "user", content: clean }],
+      });
+      const t = coach.content.find((b) => b.type === "text");
+      reply = t && t.type === "text" ? t.text : "Logged. 💪";
+    } catch {
+      reply = "Logged it. (Coach is catching its breath — try again for a reply.)";
+    }
+  }
+
+  return {
+    ok: true,
+    reply,
+    cards,
+    kcal_today: kcalToday,
+    protein_today: proteinToday,
+  };
+}
