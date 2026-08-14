@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { anthropic, PROGRAM_MODEL } from "@/lib/anthropic";
+import { generateJson } from "@/lib/ai-json";
 import { getActiveProgram } from "@/lib/programs";
 import {
   PROPOSAL_JSON_SCHEMA,
@@ -202,29 +202,18 @@ export async function generateWeeklyReview(): Promise<SimpleResult> {
     weight_trend: weightTrend,
   };
 
-  let proposal;
-  try {
-    const message = await anthropic().messages.create({
-      model: PROGRAM_MODEL,
-      max_tokens: 8000,
-      system: REVIEW_SYSTEM_PROMPT,
-      output_config: {
-        effort: "medium",
-        format: { type: "json_schema", schema: PROPOSAL_JSON_SCHEMA },
-      },
-      messages: [{ role: "user", content: buildReviewUserMessage(ctx) }],
-    });
-    if (message.stop_reason === "refusal" || message.stop_reason === "max_tokens")
-      return { ok: false, error: "Couldn't build the review — try again." };
-    const t = message.content.find((b) => b.type === "text");
-    if (!t || t.type !== "text")
-      return { ok: false, error: "Couldn't build the review — try again." };
-    const parsed = validateProposal(JSON.parse(t.text), exercises.length);
-    if (!parsed.ok) return { ok: false, error: parsed.error };
-    proposal = parsed.proposal;
-  } catch {
-    return { ok: false, error: "Couldn't reach the coach — try again in a moment." };
-  }
+  const r = await generateJson({
+    system: REVIEW_SYSTEM_PROMPT,
+    user: buildReviewUserMessage(ctx),
+    schema: PROPOSAL_JSON_SCHEMA,
+    toolName: "propose_changes",
+    maxTokens: 8000,
+    effort: "medium",
+  });
+  if (!r.ok) return { ok: false, error: r.error };
+  const parsed = validateProposal(r.data, exercises.length);
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  const proposal = parsed.proposal;
 
   // Replace any existing pending proposal for this program.
   await supabase

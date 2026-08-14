@@ -1,6 +1,6 @@
 // The program-generation contract (Doc 02 §3c). This module holds:
 //  - the TypeScript shape the app works with,
-//  - the JSON Schema handed to Claude via structured outputs (guarantees shape),
+//  - the JSON Schema handed to Claude as a forced-tool input_schema (see lib/ai-json.ts),
 //  - a defensive validator/normalizer used on BOTH the AI output and the
 //    client-approved payload before anything is written (never trust either).
 
@@ -46,10 +46,11 @@ export type GeneratedProgram = {
   flags: string[];
 };
 
-// JSON Schema for Claude structured outputs (output_config.format). Every field
-// is required and nullable-where-optional so the model always returns the full
-// shape. No minLength/maximum/etc. — structured outputs doesn't support them
-// (we range-check in the validator instead).
+// JSON Schema passed as the forced-tool input_schema (lib/ai-json.ts). Every
+// field is required and nullable-where-optional so the model returns the full
+// shape. Range/format checks live in validateProgram below (the schema is a
+// shape hint, not a compiled constraint — that's exactly why nullable enums
+// like suggested_load_type are safe here but 400 under output_config.format).
 export const PROGRAM_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,

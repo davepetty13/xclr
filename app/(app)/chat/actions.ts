@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { anthropic, PROGRAM_MODEL } from "@/lib/anthropic";
+import { generateJson } from "@/lib/ai-json";
 import { PARSE_JSON_SCHEMA, normalizeParse, type ParsedFood } from "@/lib/parse-schema";
 import {
   PARSE_SYSTEM_PROMPT,
@@ -53,27 +54,16 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
   if (!user) return { ok: false, error: "You're signed out — sign in again." };
 
   // ---- 1. Parse (separate call — the parser logs, the coach coaches). ----
-  let parsed;
-  try {
-    const msg = await anthropic().messages.create({
-      model: PROGRAM_MODEL,
-      max_tokens: 2000,
-      system: PARSE_SYSTEM_PROMPT,
-      output_config: {
-        effort: "low",
-        format: { type: "json_schema", schema: PARSE_JSON_SCHEMA },
-      },
-      messages: [{ role: "user", content: clean }],
-    });
-    if (msg.stop_reason === "refusal")
-      return { ok: false, error: "I couldn't read that — try rephrasing." };
-    const t = msg.content.find((b) => b.type === "text");
-    if (!t || t.type !== "text")
-      return { ok: false, error: "I couldn't read that — try again." };
-    parsed = normalizeParse(JSON.parse(t.text));
-  } catch {
-    return { ok: false, error: "Couldn't reach the coach — try again in a moment." };
-  }
+  const parseResult = await generateJson({
+    system: PARSE_SYSTEM_PROMPT,
+    user: clean,
+    schema: PARSE_JSON_SCHEMA,
+    toolName: "log_entry",
+    maxTokens: 2000,
+    effort: "low",
+  });
+  if (!parseResult.ok) return { ok: false, error: parseResult.error };
+  const parsed = normalizeParse(parseResult.data);
 
   const justLogged: string[] = [];
   const cards: FoodCard[] = [];
@@ -286,7 +276,10 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
       });
       const t = coach.content.find((b) => b.type === "text");
       reply = t && t.type === "text" ? t.text : "Logged. 💪";
-    } catch {
+    } catch (err) {
+      const status = (err as { status?: number } | null)?.status;
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[coach reply] Anthropic error status=${status ?? "?"} message=${message}`);
       reply = "Logged it. (Coach is catching its breath — try again for a reply.)";
     }
   }

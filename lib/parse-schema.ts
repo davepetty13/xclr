@@ -38,7 +38,7 @@ export type ParsedInput = {
   needs_clarification: string | null;
 };
 
-// Structured-output schema handed to Claude. Every field required; nullable
+// Forced-tool input_schema handed to Claude (lib/ai-json.ts). Every field required; nullable
 // where optional so the model always returns the full shape.
 export const PARSE_JSON_SCHEMA = {
   type: "object",

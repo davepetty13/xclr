@@ -20,7 +20,7 @@ export type ProgramInputs = {
 };
 
 // The generation rules (Doc 02 §3b) + coach voice (§2b) + medical guardrail
-// (§11). The JSON shape itself is enforced by structured outputs, so this
+// (§11). The JSON shape is produced via forced tool use + validateProgram, so this
 // focuses on the substance and the coach_note voice.
 export const PROGRAM_SYSTEM_PROMPT = `You are Xclr, a warm, encouraging strength & conditioning coach building a user's FIRST training program at signup. You output a structured program that the user will review and approve — propose a sane, safe starting plan, never an imposed one.
 

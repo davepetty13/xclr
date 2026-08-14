@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { anthropic, PROGRAM_MODEL } from "@/lib/anthropic";
+import { generateJson } from "@/lib/ai-json";
 import {
   PROGRAM_JSON_SCHEMA,
   validateProgram,
@@ -84,36 +84,19 @@ export async function generateProgram(): Promise<GenerateResult> {
     medical,
   };
 
-  try {
-    const message = await anthropic().messages.create({
-      model: PROGRAM_MODEL,
-      max_tokens: 16000,
-      system: PROGRAM_SYSTEM_PROMPT,
-      // Structured outputs guarantee the response matches the §3c contract;
-      // medium effort bounds thinking spend (thinking counts against max_tokens).
-      output_config: {
-        effort: "medium",
-        format: { type: "json_schema", schema: PROGRAM_JSON_SCHEMA },
-      },
-      messages: [{ role: "user", content: buildProgramUserMessage(inputs) }],
-    });
-
-    if (message.stop_reason === "refusal")
-      return { ok: false, error: "The coach couldn't build that. Try again." };
-    if (message.stop_reason === "max_tokens")
-      return { ok: false, error: "That program ran long — tap Regenerate to try again." };
-
-    const textBlock = message.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text")
-      return { ok: false, error: "The coach didn't return a program. Try again." };
-
-    const parsed = JSON.parse(textBlock.text);
-    const result = validateProgram(parsed);
-    if (!result.ok) return { ok: false, error: result.error };
-    return { ok: true, program: result.program };
-  } catch {
-    return { ok: false, error: "Couldn't reach the coach — try again in a moment." };
-  }
+  // Forced tool use returns the §3c JSON; validateProgram is the source of truth.
+  const r = await generateJson({
+    system: PROGRAM_SYSTEM_PROMPT,
+    user: buildProgramUserMessage(inputs),
+    schema: PROGRAM_JSON_SCHEMA,
+    toolName: "save_program",
+    maxTokens: 16000,
+    effort: "medium",
+  });
+  if (!r.ok) return { ok: false, error: r.error };
+  const result = validateProgram(r.data);
+  if (!result.ok) return { ok: false, error: result.error };
+  return { ok: true, program: result.program };
 }
 
 // Approve (and optionally edited) program → write the plan-layer rows and make
