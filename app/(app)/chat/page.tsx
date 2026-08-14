@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { ChatTab } from "@/components/app/chat-tab";
+import { ChatTab, type Msg } from "@/components/app/chat-tab";
 import type { CoachPersona } from "@/lib/chat-prompts";
 
 export default async function ChatPage() {
@@ -27,11 +27,29 @@ export default async function ChatPage() {
   );
   const persona = (profile?.coach_persona as CoachPersona) ?? {};
 
+  // Last ~50 turns, oldest-first, as text bubbles.
+  const { data: history } = await supabase
+    .from("messages")
+    .select("role, content")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  const initialMessages: Msg[] = (history ?? [])
+    .slice()
+    .reverse()
+    .map((r) =>
+      r.role === "coach"
+        ? { role: "coach" as const, text: r.content as string, cards: [] }
+        : { role: "user" as const, text: r.content as string }
+    );
+
   return (
     <ChatTab
+      userId={user.id}
       coachName={persona.coach_name || "Xclr"}
       firstName={(profile?.display_name ?? "").split(" ")[0] || "there"}
       quickChips={chips}
+      initialMessages={initialMessages}
     />
   );
 }

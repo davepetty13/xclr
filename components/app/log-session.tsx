@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { logSession, type SetInput } from "@/app/(app)/workout/actions";
 import { formatLoad, type LoadType } from "@/lib/program-schema";
@@ -21,10 +21,12 @@ export type LogExercise = {
 type Cell = { load: string; reps: string; rpe: string };
 
 export function LogSession({
+  userId,
   dayId,
   type,
   exercises,
 }: {
+  userId: string;
   dayId: string;
   type: string | null;
   exercises: LogExercise[];
@@ -35,6 +37,38 @@ export function LogSession({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Draft survives a mobile reload / tab switch until the session is submitted.
+  const draftKey = `xclr-draft-workout-${userId}-${dayId}`;
+  const persistReady = useRef(false);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) {
+        const d = JSON.parse(raw) as { cells?: Record<string, Cell>; note?: string };
+        if (d.cells) setCells(d.cells);
+        if (typeof d.note === "string") setNote(d.note);
+      }
+    } catch {
+      // ignore a malformed draft
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+
+  useEffect(() => {
+    // Skip the first run so the empty initial state doesn't clobber the draft
+    // we just hydrated above.
+    if (!persistReady.current) {
+      persistReady.current = true;
+      return;
+    }
+    try {
+      localStorage.setItem(draftKey, JSON.stringify({ cells, note }));
+    } catch {
+      // storage unavailable/full — non-fatal
+    }
+  }, [draftKey, cells, note]);
 
   const key = (peId: string, i: number) => `${peId}:${i}`;
   const get = (peId: string, i: number, suggested: number | null): Cell =>
@@ -75,6 +109,11 @@ export function LogSession({
     const r = await logSession(dayId, type, sets, note);
     setBusy(false);
     if (r.ok) {
+      try {
+        localStorage.removeItem(draftKey);
+      } catch {
+        // non-fatal
+      }
       setDone(true);
       router.refresh();
     } else {

@@ -36,7 +36,7 @@ export async function generateProgram(): Promise<GenerateResult> {
   const { data: profile } = await supabase
     .from("profiles")
     .select(
-      "display_name, primary_goal, sports, training_days_per_week, session_minutes, preferred_days, preferred_time, training_experience, equipment_access, height_cm, goal_weight_kg, health_data_consent_at"
+      "display_name, primary_goal, sports, training_days_per_week, session_minutes, preferred_days, preferred_time, training_experience, equipment_access, height_cm, goal_weight_kg, health_data_consent_at, training_notes"
     )
     .eq("id", user.id)
     .single();
@@ -82,6 +82,7 @@ export async function generateProgram(): Promise<GenerateResult> {
     goal_weight_kg:
       profile.goal_weight_kg != null ? Number(profile.goal_weight_kg) : null,
     medical,
+    training_notes: (profile.training_notes as string | null) ?? null,
   };
 
   // Forced tool use returns the §3c JSON; validateProgram is the source of truth.
@@ -223,5 +224,22 @@ export async function approveProgram(
     if (peErr) return { ok: false, error: "Couldn't save your exercises." };
   }
 
+  return { ok: true };
+}
+
+// Save a free-text training-style preference on the profile, so the next
+// generation (regenerate) picks it up. RLS-scoped to the caller.
+export async function saveTrainingNotes(note: string): Promise<ApproveResult> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "You're signed out — sign in again." };
+  const trimmed = (note ?? "").trim();
+  const { error } = await supabase
+    .from("profiles")
+    .update({ training_notes: trimmed || null, updated_at: new Date().toISOString() })
+    .eq("id", user.id);
+  if (error) return { ok: false, error: "Couldn't save your note." };
   return { ok: true };
 }

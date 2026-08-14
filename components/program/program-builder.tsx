@@ -2,7 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { generateProgram, approveProgram } from "@/app/program/actions";
+import {
+  generateProgram,
+  approveProgram,
+  saveTrainingNotes,
+} from "@/app/program/actions";
 import { formatLoad, type GeneratedProgram } from "@/lib/program-schema";
 import { AutoGrowTextarea, TextField } from "@/components/onboarding/controls";
 
@@ -18,9 +22,11 @@ const DAY_BADGE: Record<string, string> = {
 export function ProgramBuilder({
   displayName,
   goalLabel,
+  initialNotes = "",
 }: {
   displayName: string;
   goalLabel: string;
+  initialNotes?: string;
 }) {
   const router = useRouter();
   const started = useRef(false);
@@ -28,6 +34,16 @@ export function ProgramBuilder({
   const [program, setProgram] = useState<GeneratedProgram | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
+  const [notes, setNotes] = useState(initialNotes);
+
+  async function saveAndRegenerate() {
+    const r = await saveTrainingNotes(notes);
+    if (!r.ok) {
+      setError(r.error);
+      return;
+    }
+    void build();
+  }
 
   async function build() {
     setPhase("building");
@@ -252,7 +268,30 @@ export function ProgramBuilder({
         </p>
       ) : null}
 
-      <div className="mt-6 flex items-center gap-3">
+      <div className="mt-6">
+        <label
+          htmlFor="training-notes"
+          className="mb-1 block text-sm font-semibold text-ink"
+        >
+          Want a different style? Tell Xclr, then regenerate
+        </label>
+        <AutoGrowTextarea
+          value={notes}
+          onChange={setNotes}
+          placeholder="e.g. Push/Pull/Legs split, big-muscle days early in the week"
+          ariaLabel="Training style preference"
+        />
+        <button
+          type="button"
+          onClick={() => void saveAndRegenerate()}
+          disabled={approving}
+          className="mt-2 w-full rounded-chip border border-line bg-card px-4 py-2.5 text-sm font-semibold text-ink transition-opacity hover:opacity-80 disabled:opacity-50"
+        >
+          Save note &amp; regenerate
+        </button>
+      </div>
+
+      <div className="mt-4 flex items-center gap-3">
         <button
           type="button"
           onClick={() => void build()}

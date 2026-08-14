@@ -284,6 +284,16 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
     }
   }
 
+  // Persist the turn so bubbles survive a reload (text only — the live cards are
+  // derived from food_logs). Coach row is +1ms so ordering is deterministic.
+  const nowMs = Date.now();
+  const { error: msgErr } = await supabase.from("messages").insert([
+    { user_id: user.id, role: "user", content: clean, created_at: new Date(nowMs).toISOString() },
+    { user_id: user.id, role: "coach", content: reply, created_at: new Date(nowMs + 1).toISOString() },
+  ]);
+  // Persistence is best-effort (the reply still returns) — but log, don't swallow.
+  if (msgErr) console.error(`[messages persist] ${msgErr.message}`);
+
   return {
     ok: true,
     reply,

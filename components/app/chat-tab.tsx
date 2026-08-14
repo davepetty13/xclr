@@ -1,29 +1,59 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { sendChatMessage, type FoodCard } from "@/app/(app)/chat/actions";
 
-type Msg =
+export type Msg =
   | { role: "user"; text: string }
   | { role: "coach"; text: string; cards: FoodCard[] };
 
 export function ChatTab({
+  userId,
   coachName,
   firstName,
   quickChips,
+  initialMessages = [],
 }: {
+  userId: string;
   coachName: string;
   firstName: string;
   quickChips: string[];
+  initialMessages?: Msg[];
 }) {
   const router = useRouter();
-  const [messages, setMessages] = useState<Msg[]>([]);
+  const [messages, setMessages] = useState<Msg[]>(initialMessages);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [totals, setTotals] = useState<{ kcal: number; protein: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  // Composer draft survives a mobile reload / tab switch until sent.
+  const draftKey = `xclr-draft-chat-${userId}`;
+  const persistReady = useRef(false);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) setInput(raw);
+    } catch {
+      // ignore
+    }
+  }, [draftKey]);
+
+  useEffect(() => {
+    if (!persistReady.current) {
+      persistReady.current = true;
+      return;
+    }
+    try {
+      if (input) localStorage.setItem(draftKey, input);
+      else localStorage.removeItem(draftKey);
+    } catch {
+      // storage unavailable — non-fatal
+    }
+  }, [draftKey, input]);
 
   async function send(text: string) {
     const clean = text.trim();

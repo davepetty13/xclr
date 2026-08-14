@@ -13,7 +13,7 @@ export default async function ProgramPage() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("display_name, height_cm, primary_goal")
+    .select("display_name, height_cm, primary_goal, training_notes")
     .eq("id", user.id)
     .single();
 
@@ -28,6 +28,7 @@ export default async function ProgramPage() {
     <ProgramBuilder
       displayName={profile?.display_name ?? ""}
       goalLabel={goalLabel}
+      initialNotes={(profile?.training_notes as string | null) ?? ""}
     />
   );
 }

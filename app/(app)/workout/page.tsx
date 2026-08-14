@@ -113,6 +113,7 @@ export default async function WorkoutTodayPage({
         </p>
       ) : (
         <LogSession
+          userId={user.id}
           dayId={day.id as string}
           type={(day.type as string | null) ?? null}
           exercises={exercises}

@@ -21,7 +21,7 @@ export default async function TodayPage() {
   const { data: profile } = await supabase
     .from("profiles")
     .select(
-      "display_name, primary_goal, daily_calorie_target, daily_protein_target, weight_unit"
+      "display_name, primary_goal, daily_calorie_target, daily_protein_target, weight_unit, training_days_per_week"
     )
     .eq("id", user.id)
     .single();
@@ -68,6 +68,7 @@ export default async function TodayPage() {
     .gte("performed_at", weekStart);
 
   const activeProgram = await getActiveProgram(supabase, user.id);
+  const trainingDaysPerWeek = Number(profile?.training_days_per_week) || 0;
   let planned = 0;
   if (activeProgram) {
     const { count } = await supabase
@@ -76,7 +77,10 @@ export default async function TodayPage() {
       .eq("user_id", user.id)
       .eq("program_id", activeProgram.id)
       .neq("type", "rest");
-    planned = count ?? 0;
+    // The program's actual training-day count, capped at the user's chosen
+    // days/week (so an over-scheduled program still shows the intended target).
+    const nonRest = count ?? 0;
+    planned = trainingDaysPerWeek > 0 ? Math.min(nonRest, trainingDaysPerWeek) : nonRest;
   }
 
   const { data: sleepRows } = await supabase
