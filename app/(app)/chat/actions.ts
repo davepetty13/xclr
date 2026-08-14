@@ -11,6 +11,7 @@ import {
   type CoachPersona,
 } from "@/lib/chat-prompts";
 import { resolveExerciseIds } from "@/lib/exercises";
+import { getActiveProgram } from "@/lib/programs";
 
 export type FoodCard = {
   id: string;
@@ -245,6 +246,40 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
     medical = (conds ?? []).map((c) => c.condition as string);
   }
 
+  // Active program prescriptions so the coach can answer load-type / "is 40
+  // total or per side?" questions from the user's own program data.
+  let programName: string | null = null;
+  let prescriptions: CoachContext["prescriptions"] = [];
+  const activeProgram = await getActiveProgram(supabase, user.id);
+  if (activeProgram) {
+    programName = activeProgram.name;
+    const { data: days } = await supabase
+      .from("program_days")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("program_id", activeProgram.id);
+    const dayIds = (days ?? []).map((d) => d.id as string);
+    if (dayIds.length) {
+      const { data: pes } = await supabase
+        .from("program_exercises")
+        .select("exercise_id, suggested_load_value, suggested_load_type, rep_scheme")
+        .eq("user_id", user.id)
+        .in("program_day_id", dayIds);
+      const { data: exRows } = await supabase
+        .from("exercises")
+        .select("id, name")
+        .eq("user_id", user.id);
+      const nameById = new Map<string, string>();
+      for (const e of exRows ?? []) nameById.set(e.id as string, e.name as string);
+      prescriptions = (pes ?? []).map((pe) => ({
+        name: nameById.get(pe.exercise_id as string) ?? "Exercise",
+        load_value: pe.suggested_load_value as number | null,
+        load_type: pe.suggested_load_type as string | null,
+        rep_scheme: pe.rep_scheme as string | null,
+      }));
+    }
+  }
+
   const ctx: CoachContext = {
     persona: (profile?.coach_persona as CoachPersona) ?? {},
     display_name: profile?.display_name ?? "there",
@@ -260,6 +295,8 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
     })),
     medical,
     just_logged: justLogged,
+    program_name: programName,
+    prescriptions,
   };
 
   let reply = parsed.needs_clarification ?? "";
