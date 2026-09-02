@@ -6,6 +6,10 @@ import {
   type ReviewItem,
 } from "@/components/app/week-review";
 
+// generateWeeklyReview calls the Anthropic API (20–30s). Route-segment
+// maxDuration on the page governs the Server Actions it invokes.
+export const maxDuration = 60;
+
 export default async function WorkoutReviewPage() {
   const supabase = createClient();
   const {
