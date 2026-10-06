@@ -62,7 +62,19 @@ export function ChatTab({
     setInput("");
     setMessages((m) => [...m, { role: "user", text: clean }]);
     setBusy(true);
-    const result = await sendChatMessage(clean);
+    let result: Awaited<ReturnType<typeof sendChatMessage>>;
+    try {
+      result = await sendChatMessage(clean);
+    } catch (err) {
+      // The server action itself failed (function timeout / 5xx / dropped
+      // connection) — surface it instead of leaving the chat hanging.
+      console.error("[chat] sendChatMessage failed", err);
+      setBusy(false);
+      setError(
+        "That took too long and didn't finish. Check Today before resending — your entry may already be logged."
+      );
+      return;
+    }
     setBusy(false);
     if (result.ok) {
       setMessages((m) => [

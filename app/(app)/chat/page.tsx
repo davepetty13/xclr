@@ -2,10 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 import { ChatTab, type Msg } from "@/components/app/chat-tab";
 import type { CoachPersona } from "@/lib/chat-prompts";
 
-// sendChatMessage makes Anthropic calls (parse + coach, 20–30s). Route-segment
-// maxDuration on the page governs the Server Actions it invokes; it can't go on
-// the "use server" action module.
-export const maxDuration = 60;
+// sendChatMessage makes two sequential Anthropic calls (parse + coach) with
+// retries on 429/529. Route-segment maxDuration on the page governs the Server
+// Actions it invokes; it can't go on the "use server" action module. Must match
+// AI_BUDGET_SECONDS.chat in lib/anthropic.ts.
+export const maxDuration = 120;
 
 export default async function ChatPage() {
   const supabase = createClient();

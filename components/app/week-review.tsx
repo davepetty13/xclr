@@ -38,7 +38,19 @@ export function WeekReview({ proposal }: { proposal: PendingProposal }) {
   async function run(fn: () => Promise<{ ok: boolean; error?: string }>) {
     setBusy(true);
     setError(null);
-    const r = await fn();
+    let r: { ok: boolean; error?: string };
+    try {
+      r = await fn();
+    } catch (err) {
+      // Server action failed outright (function timeout / 5xx / dropped
+      // connection) — show it instead of leaving the button stuck.
+      console.error("[week review] action failed", err);
+      r = {
+        ok: false,
+        error:
+          "That took too long or the connection dropped. Try again.",
+      };
+    }
     setBusy(false);
     if (r.ok) router.refresh();
     else setError(r.error ?? "Something went wrong.");
@@ -60,7 +72,10 @@ export function WeekReview({ proposal }: { proposal: PendingProposal }) {
           {busy ? "Reviewing your week…" : "Generate this week's review"}
         </button>
         {error ? (
-          <p role="alert" className="mt-3 text-sm font-medium text-ink">
+          <p
+            role="alert"
+            className="mt-3 rounded-chip border border-ember bg-ember-soft px-4 py-3 text-sm font-medium text-ink"
+          >
             {error}
           </p>
         ) : null}

@@ -4,12 +4,13 @@ import { isOnboarded } from "@/lib/onboarding";
 import { PRIMARY_GOALS } from "@/lib/onboarding-options";
 import { ProgramBuilder } from "@/components/program/program-builder";
 
-// Program generation calls the Anthropic API (20–30s); raise the serverless
-// function limit above Vercel's short default. maxDuration is route-segment
+// Program generation calls the Anthropic API with up to 16k output tokens plus
+// adaptive thinking — routinely past 60s on long programs, and retries on
+// 429/529 need room too. maxDuration is route-segment
 // config — it must live on the page, not the "use server" action module (which
 // may only export async functions), and it governs the Server Actions this page
-// invokes.
-export const maxDuration = 60;
+// invokes. Must match AI_BUDGET_SECONDS.program in lib/anthropic.ts.
+export const maxDuration = 300;
 
 export default async function ProgramPage() {
   const supabase = createClient();

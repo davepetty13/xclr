@@ -2,6 +2,8 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { generateJson } from "@/lib/ai-json";
+import { AI_BUDGET_SECONDS } from "@/lib/anthropic";
+import { deadlineAfter } from "@/lib/ai-call";
 import { getActiveProgram } from "@/lib/programs";
 import {
   PROPOSAL_JSON_SCHEMA,
@@ -87,6 +89,7 @@ export async function logSession(
 // Generate this week's progression proposal (Doc 02 §4). Never auto-applies —
 // it writes a pending proposal + items the user reviews.
 export async function generateWeeklyReview(): Promise<SimpleResult> {
+  const deadline = deadlineAfter(AI_BUDGET_SECONDS.review);
   const supabase = createClient();
   const {
     data: { user },
@@ -208,6 +211,7 @@ export async function generateWeeklyReview(): Promise<SimpleResult> {
     schema: PROPOSAL_JSON_SCHEMA,
     toolName: "propose_changes",
     maxTokens: 8000,
+    deadline,
     effort: "medium",
   });
   if (!r.ok) return { ok: false, error: r.error };

@@ -2,6 +2,8 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { generateJson } from "@/lib/ai-json";
+import { AI_BUDGET_SECONDS } from "@/lib/anthropic";
+import { deadlineAfter } from "@/lib/ai-call";
 import {
   PROGRAM_JSON_SCHEMA,
   validateProgram,
@@ -27,6 +29,7 @@ function todayISO(): string {
 // nothing is written to the DB until the user approves (Doc 02 §1: signup ends
 // with an approved program, not an imposed one).
 export async function generateProgram(): Promise<GenerateResult> {
+  const deadline = deadlineAfter(AI_BUDGET_SECONDS.program);
   const supabase = createClient();
   const {
     data: { user },
@@ -92,6 +95,7 @@ export async function generateProgram(): Promise<GenerateResult> {
     schema: PROGRAM_JSON_SCHEMA,
     toolName: "save_program",
     maxTokens: 16000,
+    deadline,
     effort: "medium",
   });
   if (!r.ok) return { ok: false, error: r.error };

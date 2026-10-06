@@ -1,7 +1,8 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { anthropic, PROGRAM_MODEL } from "@/lib/anthropic";
+import { AI_BUDGET_SECONDS, PROGRAM_MODEL } from "@/lib/anthropic";
+import { createMessage, deadlineAfter } from "@/lib/ai-call";
 import { generateJson } from "@/lib/ai-json";
 import { PARSE_JSON_SCHEMA, normalizeParse, type ParsedFood } from "@/lib/parse-schema";
 import {
@@ -45,6 +46,8 @@ function todayDateISO(): string {
 }
 
 export async function sendChatMessage(text: string): Promise<ChatResult> {
+  // One budget shared by the parse + coach calls (matches the page maxDuration).
+  const deadline = deadlineAfter(AI_BUDGET_SECONDS.chat);
   const clean = (text ?? "").trim();
   if (!clean) return { ok: false, error: "Say something to log." };
 
@@ -61,6 +64,7 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
     schema: PARSE_JSON_SCHEMA,
     toolName: "log_entry",
     maxTokens: 2000,
+    deadline,
     effort: "low",
   });
   if (!parseResult.ok) return { ok: false, error: parseResult.error };
@@ -145,18 +149,20 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
 
     // Weight → today's row (metric only).
     if (parsed.weight_kg != null) {
-      await supabase
+      const { error: wErr } = await supabase
         .from("weights")
         .upsert(
           { user_id: user.id, measured_on: todayDateISO(), kg: parsed.weight_kg },
           { onConflict: "user_id,measured_on" }
         );
-      justLogged.push(`weight ${parsed.weight_kg}kg`);
+      // Only claim what was actually saved.
+      if (wErr) console.error(`[chat weight] ${wErr.message}`);
+      else justLogged.push(`weight ${parsed.weight_kg}kg`);
     }
 
     // Sleep → today's row.
     if (parsed.sleep) {
-      await supabase.from("sleep_logs").upsert(
+      const { error: sErr } = await supabase.from("sleep_logs").upsert(
         {
           user_id: user.id,
           slept_on: todayDateISO(),
@@ -166,7 +172,8 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
         },
         { onConflict: "user_id,slept_on" }
       );
-      justLogged.push("sleep");
+      if (sErr) console.error(`[chat sleep] ${sErr.message}`);
+      else justLogged.push("sleep");
     }
 
     // Workout → session + set_logs (completes the §10 mapping).
@@ -201,7 +208,10 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
             };
           })
           .filter((r): r is NonNullable<typeof r> => r !== null);
-        if (setRows.length) await supabase.from("set_logs").insert(setRows);
+        if (setRows.length) {
+          const { error: slErr } = await supabase.from("set_logs").insert(setRows);
+          if (slErr) console.error(`[chat set_logs] ${slErr.message}`);
+        }
         justLogged.push(`${parsed.workout.type ?? "workout"} logged`);
       }
     }
@@ -301,8 +311,8 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
 
   let reply = parsed.needs_clarification ?? "";
   if (!reply) {
-    try {
-      const coach = await anthropic().messages.create({
+    const coach = await createMessage(
+      {
         model: PROGRAM_MODEL,
         // Headroom for adaptive thinking (on by default) + the short reply, so
         // the visible text isn't starved by the thinking budget.
@@ -310,14 +320,33 @@ export async function sendChatMessage(text: string): Promise<ChatResult> {
         system: buildCoachSystemPrompt(ctx),
         output_config: { effort: "low" },
         messages: [{ role: "user", content: clean }],
-      });
-      const t = coach.content.find((b) => b.type === "text");
-      reply = t && t.type === "text" ? t.text : "Logged. 💪";
-    } catch (err) {
-      const status = (err as { status?: number } | null)?.status;
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[coach reply] Anthropic error status=${status ?? "?"} message=${message}`);
-      reply = "Logged it. (Coach is catching its breath — try again for a reply.)";
+      },
+      { label: "coach reply", deadline }
+    );
+    let coachError: string | null = null;
+    if (!coach.ok) {
+      coachError = coach.error;
+    } else {
+      const t = coach.message.content.find((b) => b.type === "text");
+      const text = t && t.type === "text" ? t.text.trim() : "";
+      if (text) {
+        reply = text;
+      } else {
+        // Logged, not swallowed: e.g. thinking used the whole max_tokens.
+        console.error(
+          `[coach reply] no text stop_reason=${coach.message.stop_reason} output_tokens=${coach.message.usage.output_tokens}`
+        );
+        coachError =
+          coach.message.stop_reason === "refusal"
+            ? "The coach declined to answer that one."
+            : "The coach's reply came back empty. Try asking again.";
+      }
+    }
+    if (coachError) {
+      // Nothing was written this turn → fail loudly so it's safe to resend.
+      if (!justLogged.length) return { ok: false, error: coachError };
+      // Rows were written → keep them, but say plainly the reply failed.
+      reply = `Logged ${justLogged.join(", ")}. No reply this time — ${coachError}`;
     }
   }
 

@@ -37,7 +37,14 @@ export function ProgramBuilder({
   const [notes, setNotes] = useState(initialNotes);
 
   async function saveAndRegenerate() {
-    const r = await saveTrainingNotes(notes);
+    let r: Awaited<ReturnType<typeof saveTrainingNotes>>;
+    try {
+      r = await saveTrainingNotes(notes);
+    } catch (err) {
+      console.error("[program] saveTrainingNotes failed", err);
+      setError("Couldn't save your note — the connection dropped. Try again.");
+      return;
+    }
     if (!r.ok) {
       setError(r.error);
       return;
@@ -48,7 +55,19 @@ export function ProgramBuilder({
   async function build() {
     setPhase("building");
     setError(null);
-    const result = await generateProgram();
+    let result: Awaited<ReturnType<typeof generateProgram>>;
+    try {
+      result = await generateProgram();
+    } catch (err) {
+      // Server action failed outright (function timeout / 5xx / dropped
+      // connection) — show it instead of spinning forever.
+      console.error("[program] generateProgram failed", err);
+      setError(
+        "Building your program took too long or the connection dropped. Tap Try again."
+      );
+      setPhase("error");
+      return;
+    }
     if (result.ok) {
       setProgram(result.program);
       setPhase("preview");
@@ -93,7 +112,15 @@ export function ProgramBuilder({
     if (!program) return;
     setApproving(true);
     setError(null);
-    const result = await approveProgram(program);
+    let result: Awaited<ReturnType<typeof approveProgram>>;
+    try {
+      result = await approveProgram(program);
+    } catch (err) {
+      console.error("[program] approveProgram failed", err);
+      setError("That took too long or the connection dropped. Try again.");
+      setApproving(false);
+      return;
+    }
     if (result.ok) {
       router.replace("/");
       router.refresh();
@@ -115,7 +142,7 @@ export function ProgramBuilder({
         </h1>
         <p className="mt-3 text-sm font-medium text-muted">
           Shaping a {goalLabel.toLowerCase()} plan around your availability. This
-          takes a few seconds.
+          can take a minute or two.
         </p>
       </main>
     );
