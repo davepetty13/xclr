@@ -108,9 +108,9 @@ export function NewWeek({
         type="button"
         onClick={() => setOpen(true)}
         aria-expanded={false}
-        className="min-h-[44px] self-start px-1 text-sm font-semibold text-green underline-offset-4 hover:underline"
+        className="btn-secondary self-start px-4 text-[13px]"
       >
-        Start a new week
+        Start a new week…
       </button>
     );
   }

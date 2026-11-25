@@ -48,6 +48,7 @@ export function FoodTab({
 }) {
   const router = useRouter();
   const [meal, setMeal] = useState<string>("lunch");
+  const [added, setAdded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<FoodRow | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -146,12 +147,23 @@ export function FoodTab({
       {/* Quick-add from personal library */}
       <div className="flex items-baseline justify-between px-1">
         <h2 className="text-sm font-bold text-ink">Your library</h2>
-        <span className="text-[11px] text-muted">Tap to add · no AI</span>
+        {library.length ? <span className="text-[11px] text-muted">Tap a dish to add · no AI</span> : null}
       </div>
-      {library.length === 0 ? (
-        <p className="glass p-4 text-sm font-medium text-muted">
-          Dishes you log in Chat land here, ready to add with one tap.
+      {added ? (
+        <p role="status" className="mark mark-green self-start px-3 py-2 text-xs">
+          {added}
         </p>
+      ) : null}
+      {library.length === 0 ? (
+        <div className="glass flex flex-col gap-3 p-4">
+          <p className="text-sm font-medium text-muted">
+            Your library is empty for now. Log a dish once in Coach, or confirm an estimate below, and it shows
+            up here for one-tap adding.
+          </p>
+          <a href="/chat" className="btn-primary btn-primary-green self-start px-4 text-[13px]">
+            Log a dish in Coach
+          </a>
+        </div>
       ) : shown.length === 0 ? (
         <p className="px-1 text-sm text-muted">No dish in your library matches “{query}”.</p>
       ) : (
@@ -161,7 +173,14 @@ export function FoodTab({
               key={l.id}
               type="button"
               disabled={busy}
-              onClick={() => void run(() => quickAddFromLibrary(l.id, meal))}
+              onClick={() =>
+                void run(async () => {
+                  setAdded(null);
+                  const r = await quickAddFromLibrary(l.id, meal);
+                  if (r.ok) setAdded(`Added ${l.name} to ${meal}.`);
+                  return r;
+                })
+              }
               aria-label={`Add ${l.name} to ${meal}`}
               className="glass flex flex-col gap-0.5 !rounded-tile px-3.5 py-3 text-left text-ink transition-opacity disabled:opacity-50"
             >
@@ -171,9 +190,14 @@ export function FoodTab({
                   .filter(Boolean)
                   .join(" · ") || "\u00a0"}
               </span>
-              <span className="tnum font-display text-[19px] font-bold">
-                {l.kcal != null ? fmt(l.kcal) : "—"}{" "}
-                <span className="font-sans text-xs font-medium text-muted">kcal</span>
+              <span className="flex items-end justify-between gap-2">
+                <span className="tnum font-display text-[19px] font-bold">
+                  {l.kcal != null ? fmt(l.kcal) : "—"}{" "}
+                  <span className="font-sans text-xs font-medium text-muted">kcal</span>
+                </span>
+                <span aria-hidden className="btn-primary btn-primary-green min-h-[32px] px-2.5 text-xs">
+                  + Add
+                </span>
               </span>
             </button>
           ))}

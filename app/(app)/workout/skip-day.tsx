@@ -76,9 +76,9 @@ export function SkipDay({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="min-h-[44px] self-start text-sm font-semibold text-muted underline underline-offset-4"
+          className="btn-secondary self-start px-4 text-[13px]"
         >
-          Skip this day
+          Skip this day…
         </button>
       </div>
     );
