@@ -13,10 +13,12 @@ type Started = { week: number; hasProposal: boolean; reviewFrom: string };
 export function NewWeek({
   week,
   weekComplete,
+  weekEnded = false,
   defaultOpen = false,
 }: {
   week: number;
   weekComplete: boolean;
+  weekEnded?: boolean; // Sunday has passed (days may be unfinished)
   defaultOpen?: boolean; // e.g. right after saving review decisions
 }) {
   const router = useRouter();
@@ -119,9 +121,13 @@ export function NewWeek({
       className="glass flex flex-col gap-2 px-4 py-3.5"
     >
       <p className="text-sm font-bold text-ink">
-        {weekComplete ? `Week ${week} done. What's next?` : "Start a new week early?"}
+        {weekEnded
+          ? `Week ${week} ended. Repeat or fresh?`
+          : weekComplete
+            ? `Week ${week} done. What's next?`
+            : "Start a new week early?"}
       </p>
-      {!weekComplete ? (
+      {!weekComplete || weekEnded ? (
         <p className="text-xs font-medium text-muted">
           Unfinished days go to history as skipped.
         </p>

@@ -1,3 +1,4 @@
+import { prettyDate } from "@/lib/time";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { getWeekStatus } from "@/lib/programs";
@@ -122,9 +123,17 @@ export default async function WorkoutTodayPage({
           <p className="tnum font-display text-[19px] font-bold">{avgRpe ?? "—"}</p>
         </div>
       </section>
-      {status.weekComplete ? (
+      {status.weekEnded ? (
+        <p className="px-1 text-sm font-medium text-muted">
+          Week {status.week} ended on {prettyDate(status.weekEndsOn)}. Pick how the new week starts.
+        </p>
+      ) : status.weekComplete ? (
         <p className="px-1 text-sm font-medium text-muted">
           Every training day is done. Nice week.
+        </p>
+      ) : status.shortWeek ? (
+        <p className="px-1 text-sm font-medium text-muted">
+          Short week: {status.plannedCount} training days fit before Sunday, so some days sit this one out.
         </p>
       ) : !status.nextDay ? (
         <p className="px-1 text-sm font-medium text-muted">
@@ -132,7 +141,7 @@ export default async function WorkoutTodayPage({
         </p>
       ) : null}
 
-      <NewWeek week={status.week} weekComplete={status.weekComplete} />
+      <NewWeek week={status.week} weekComplete={status.weekComplete} weekEnded={status.weekEnded} />
 
       {/* Day selector */}
       <nav aria-label="Program days" className="flex flex-wrap gap-2">
@@ -154,6 +163,10 @@ export default async function WorkoutTodayPage({
               {d.done ? (
                 <span className={`ml-1 ${active ? "text-green-on-dark" : "text-green"}`}>
                   · done
+                </span>
+              ) : d.type !== "rest" && !d.inWeek ? (
+                <span className={`ml-1 font-medium ${active ? "text-band-secondary" : "text-muted"}`}>
+                  · not this week
                 </span>
               ) : null}
             </Link>

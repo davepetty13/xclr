@@ -1,5 +1,5 @@
 import type { createClient } from "@/lib/supabase/server";
-import { localDate, localDayStartISO, todayLocal } from "@/lib/time";
+import { addDays, localDate, localDayStartISO, todayLocal } from "@/lib/time";
 
 type Supa = ReturnType<typeof createClient>;
 
@@ -40,6 +40,7 @@ export type WeekDay = {
   label: string | null;
   type: string | null;
   done: boolean;
+  inWeek: boolean; // planned for this (possibly short) calendar week
 };
 
 export type WeekStatus = {
@@ -49,10 +50,47 @@ export type WeekStatus = {
   weekStartISO: string; // UTC instant the week started (local midnight)
   days: WeekDay[];
   doneCount: number;
-  plannedCount: number; // non-rest days
-  nextDay: WeekDay | null; // first non-rest day not done yet this week
-  weekComplete: boolean;
+  plannedCount: number; // training days planned this week (fits the days left)
+  nextDay: WeekDay | null; // first planned training day not done yet this week
+  weekComplete: boolean; // all planned days done, or the week (Sunday) has passed
+  weekEndsOn: string; // local YYYY-MM-DD, the Sunday that ends this week
+  weekEnded: boolean; // today is past weekEndsOn → time to choose Repeat / Fresh
+  shortWeek: boolean; // started mid-week, so some training days were dropped
 };
+
+// Weeks run Monday–Sunday (Dave's choice, Nov 26 2026). The Sunday on or after
+// a local date ends its week.
+export function weekEndFor(dateISO: string): string {
+  const dow = new Date(`${dateISO}T12:00:00Z`).getUTCDay(); // 0 = Sunday
+  return addDays(dateISO, (7 - dow) % 7);
+}
+
+// Lower = keep first when a mid-week start leaves fewer days than the plan has.
+// Main lifting days stay; cardio next; recovery / light days drop first.
+function keepPriority(type: string | null): number {
+  if (type === "strength") return 0;
+  if (type === "cardio") return 1;
+  if (type === "recovery") return 3;
+  return 2;
+}
+
+// Pick which training days fit in `slots` days: days already done always stay,
+// then by priority, ties by program order. Returned ids keep program order.
+export function fitWeek(
+  training: { id: string; type: string | null; done: boolean }[],
+  slots: number
+): Set<string> {
+  if (training.length <= slots) return new Set(training.map((d) => d.id));
+  const ranked = training
+    .map((d, i) => ({ d, i }))
+    .sort(
+      (a, b) =>
+        Number(b.d.done) - Number(a.d.done) ||
+        keepPriority(a.d.type) - keepPriority(b.d.type) ||
+        a.i - b.i
+    );
+  return new Set(ranked.slice(0, Math.max(slots, 0)).map((x) => x.d.id));
+}
 
 // Where the user is in their training week. A day is "done" once a session
 // for it was logged on or after local midnight of week_started_on. Weeks only
@@ -109,16 +147,27 @@ export async function getWeekStatus(
     if (id && dayIds.has(id)) doneIds.add(id);
   }
 
-  const days: WeekDay[] = rows.map((d) => ({
+  const base = rows.map((d) => ({
     id: d.id as string,
     day_index: d.day_index as number,
     label: (d.label as string | null) ?? null,
     type: (d.type as string | null) ?? null,
     done: doneIds.has(d.id as string),
   }));
-  const training = days.filter((d) => d.type !== "rest");
-  const doneCount = training.filter((d) => d.done).length;
-  const nextDay = training.find((d) => !d.done) ?? null;
+
+  // Fit the plan into the days left before Sunday (Thursday start → 4 days).
+  const weekEndsOn = weekEndFor(weekStartedOn);
+  const today = todayLocal(tz);
+  const slots =
+    Math.round((Date.parse(`${weekEndsOn}T00:00:00Z`) - Date.parse(`${weekStartedOn}T00:00:00Z`)) / 86_400_000) + 1;
+  const trainingBase = base.filter((d) => d.type !== "rest");
+  const keep = fitWeek(trainingBase, slots);
+  const days: WeekDay[] = base.map((d) => ({ ...d, inWeek: d.type !== "rest" && keep.has(d.id) }));
+
+  const planned = days.filter((d) => d.inWeek);
+  const doneCount = planned.filter((d) => d.done).length;
+  const weekEnded = today > weekEndsOn;
+  const nextDay = weekEnded ? null : planned.find((d) => !d.done) ?? null;
 
   return {
     program,
@@ -127,8 +176,11 @@ export async function getWeekStatus(
     weekStartISO,
     days,
     doneCount,
-    plannedCount: training.length,
+    plannedCount: planned.length,
     nextDay,
-    weekComplete: training.length > 0 && nextDay == null,
+    weekComplete: weekEnded || (planned.length > 0 && nextDay == null),
+    weekEndsOn,
+    weekEnded,
+    shortWeek: planned.length < trainingBase.length,
   };
 }

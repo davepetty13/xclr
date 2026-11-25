@@ -227,9 +227,13 @@ export default async function TodayPage() {
         <Link href="/workout" className="glass flex items-center justify-between gap-3 px-4 py-3.5 text-ink">
           <div className="min-w-0">
             <p className="text-xs font-semibold text-muted">Week {status.week}</p>
-            <p className="mt-0.5 font-display text-[19px] font-bold">All sessions done</p>
+            <p className="mt-0.5 font-display text-[19px] font-bold">
+              {status.weekEnded ? "New week — repeat or fresh?" : "All sessions done"}
+            </p>
           </div>
-          <span className="btn-primary btn-primary-green min-h-[38px] shrink-0 text-[13px]">Review</span>
+          <span className="btn-primary btn-primary-green min-h-[38px] shrink-0 text-[13px]">
+            {status.weekEnded ? "Choose" : "Open"}
+          </span>
         </Link>
       ) : null}
 
@@ -248,7 +252,7 @@ export default async function TodayPage() {
                 className="flex gap-[5px]"
                 aria-label={`${status.doneCount} of ${status.plannedCount} sessions done`}
               >
-                {status.days.map((d) => {
+                {status.days.filter((d) => d.inWeek).map((d) => {
                   const isNext = next?.id === d.id;
                   const cls = d.done
                     ? "bg-green"
