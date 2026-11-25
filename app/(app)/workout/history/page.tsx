@@ -2,12 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 import { getUserTz } from "@/lib/goal-change";
 import { epley1RM } from "@/lib/training";
 import { formatLoad, type LoadType } from "@/lib/program-schema";
+import { getCurrentUser } from "@/lib/session";
 
 export default async function WorkoutHistoryPage() {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
   const tz = await getUserTz(supabase, user.id);
 

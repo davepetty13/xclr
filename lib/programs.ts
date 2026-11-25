@@ -62,43 +62,51 @@ export async function getWeekStatus(
   userId: string,
   tz: string
 ): Promise<WeekStatus | null> {
-  const program = await getActiveProgram(supabase, userId);
-  if (!program) return null;
-
+  // One query for the active program + its week fields (was two).
   const { data: prog } = await supabase
     .from("programs")
-    .select("current_week, week_started_on, week_start, created_at")
-    .eq("id", program.id)
+    .select("id, name, goal, active, current_week, week_started_on, week_start, created_at")
     .eq("user_id", userId)
+    .eq("active", true)
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
+  if (!prog) return null;
+  const program: ProgramRow = {
+    id: prog.id as string,
+    name: (prog.name as string | null) ?? null,
+    goal: (prog.goal as string | null) ?? null,
+    active: true,
+  };
 
-  const week = Number(prog?.current_week) || 1;
+  const week = Number(prog.current_week) || 1;
   const weekStartedOn =
-    (prog?.week_started_on as string | null) ??
-    (prog?.week_start as string | null) ??
-    (prog?.created_at ? localDate(tz, new Date(prog.created_at as string)) : todayLocal(tz));
+    (prog.week_started_on as string | null) ??
+    (prog.week_start as string | null) ??
+    (prog.created_at ? localDate(tz, new Date(prog.created_at as string)) : todayLocal(tz));
   const weekStartISO = localDayStartISO(weekStartedOn, tz);
 
-  const { data: dayRows } = await supabase
-    .from("program_days")
-    .select("id, day_index, label, type")
-    .eq("user_id", userId)
-    .eq("program_id", program.id)
-    .order("day_index", { ascending: true });
-  const rows = dayRows ?? [];
-
-  const doneIds = new Set<string>();
-  if (rows.length) {
-    const { data: sessions } = await supabase
+  // Days and this week's sessions at the same time (was one after the other).
+  const [{ data: dayRows }, { data: sessions }] = await Promise.all([
+    supabase
+      .from("program_days")
+      .select("id, day_index, label, type")
+      .eq("user_id", userId)
+      .eq("program_id", program.id)
+      .order("day_index", { ascending: true }),
+    supabase
       .from("workout_sessions")
       .select("program_day_id")
       .eq("user_id", userId)
-      .in(
-        "program_day_id",
-        rows.map((d) => d.id as string)
-      )
-      .gte("performed_at", weekStartISO);
-    for (const s of sessions ?? []) if (s.program_day_id) doneIds.add(s.program_day_id as string);
+      .not("program_day_id", "is", null)
+      .gte("performed_at", weekStartISO),
+  ]);
+  const rows = dayRows ?? [];
+  const dayIds = new Set(rows.map((d) => d.id as string));
+  const doneIds = new Set<string>();
+  for (const x of sessions ?? []) {
+    const id = x.program_day_id as string | null;
+    if (id && dayIds.has(id)) doneIds.add(id);
   }
 
   const days: WeekDay[] = rows.map((d) => ({

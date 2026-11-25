@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { GoalChangeForm } from "@/components/app/goal-change-form";
+import { getCurrentUser } from "@/lib/session";
 
 export default async function ChangeGoalPage({
   searchParams,
@@ -8,9 +9,7 @@ export default async function ChangeGoalPage({
   searchParams?: { goal?: string };
 }) {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
 
   const [{ data: profile }, { data: latest }] = await Promise.all([

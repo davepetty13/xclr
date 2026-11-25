@@ -4,6 +4,7 @@ import { getWeekStatus } from "@/lib/programs";
 import { getUserTz } from "@/lib/goal-change";
 import { localDayStartISO, localDate, prettyDate } from "@/lib/time";
 import { countPRs, type PrSet } from "@/lib/training";
+import { getCurrentUser } from "@/lib/session";
 import {
   WeekReview,
   type PendingProposal,
@@ -18,9 +19,7 @@ export const maxDuration = 300;
 
 export default async function WorkoutReviewPage() {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
 
   const tz = await getUserTz(supabase, user.id);

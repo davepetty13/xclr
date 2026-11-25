@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Xclr mark: an X of two strokes on the ink band colour.
+       Green = intake/progress, ember = burn/activity (brand tokens). -->
+  <rect width="64" height="64" rx="15" fill="#16211B"/>
+  <path d="M19 18 L45 46" stroke="#6FCF97" stroke-width="9" stroke-linecap="round"/>
+  <path d="M45 18 L19 46" stroke="#E0603A" stroke-width="9" stroke-linecap="round"/>
+</svg>

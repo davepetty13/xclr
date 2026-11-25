@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { isOnboarded } from "@/lib/onboarding";
 import { PRIMARY_GOALS } from "@/lib/onboarding-options";
 import { ProgramBuilder } from "@/components/program/program-builder";
+import { getCurrentUser } from "@/lib/session";
 
 // Program generation calls the Anthropic API with up to 16k output tokens plus
 // adaptive thinking — routinely past 60s on long programs, and retries on
@@ -14,9 +15,7 @@ export const maxDuration = 300;
 
 export default async function ProgramPage() {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) redirect("/login");
 
   const { data: profile } = await supabase

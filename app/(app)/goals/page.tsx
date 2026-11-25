@@ -4,12 +4,11 @@ import { PRIMARY_GOALS, SPORTS } from "@/lib/onboarding-options";
 import Link from "next/link";
 import { UnitToggle } from "@/components/app/goals-panel";
 import { AiUsageCard } from "@/components/app/ai-usage-card";
+import { getCurrentUser } from "@/lib/session";
 
 export default async function GoalsPage() {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
 
   const { data: profile } = await supabase

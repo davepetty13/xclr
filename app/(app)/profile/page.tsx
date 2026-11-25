@@ -6,6 +6,7 @@ import { ProfileBodyForm } from "@/components/app/profile-body-form";
 import { ProfileTrainingForm } from "@/components/app/profile-training-form";
 import { ProfileSettingsForm } from "@/components/app/profile-settings-form";
 import { ProfileHealth, type HealthItem } from "@/components/app/profile-health";
+import { getCurrentUser } from "@/lib/session";
 
 const SOURCE_LABEL: Record<string, string> = {
   chat: "Added from chat",
@@ -20,9 +21,7 @@ function strList(v: unknown): string[] {
 // "You" — everything from onboarding, editable. BMI is never shown here.
 export default async function ProfilePage() {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
 
   const [{ data: p }, { data: latest }] = await Promise.all([

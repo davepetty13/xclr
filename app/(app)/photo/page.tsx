@@ -9,6 +9,7 @@ import {
 import { isPhotoKind, type PhotoKind } from "@/lib/photo-schema";
 import { PhotoReader } from "@/components/app/photo-reader";
 import type { RecentPhoto } from "@/components/app/photo-recent";
+import { getCurrentUser } from "@/lib/session";
 
 // Photo reads share the chat AI budget (lib/anthropic.ts AI_BUDGET_SECONDS.chat).
 // Must stay a literal.
@@ -20,9 +21,7 @@ export default async function PhotoPage({
   searchParams?: { kind?: string };
 }) {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
 
   // Layer (a): every visit clears this user's photos that are past 48 h.

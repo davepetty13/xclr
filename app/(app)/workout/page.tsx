@@ -5,6 +5,7 @@ import { getUserTz } from "@/lib/goal-change";
 import { LogSession, type LogExercise } from "@/components/app/log-session";
 import type { LoadType } from "@/lib/program-schema";
 import { NewWeek } from "./new-week";
+import { getCurrentUser } from "@/lib/session";
 
 // "Get my coach's review" (generateWeeklyReview) can be invoked from this page
 // after starting a new week; route-segment maxDuration governs the Server
@@ -17,9 +18,7 @@ export default async function WorkoutTodayPage({
   searchParams: { day?: string };
 }) {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
 
   const tz = await getUserTz(supabase, user.id);

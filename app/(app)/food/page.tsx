@@ -2,12 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 import { FoodTab } from "@/components/app/food-tab";
 import { getUserTz } from "@/lib/goal-change";
 import { todayWindow } from "@/lib/time";
+import { getCurrentUser } from "@/lib/session";
 
 export default async function FoodPage() {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
 
   // Local midnight in the user's timezone (not UTC — that reset at 8 AM Manila).

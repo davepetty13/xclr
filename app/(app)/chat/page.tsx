@@ -4,6 +4,7 @@ import type { CoachPersona } from "@/lib/chat-prompts";
 import { readMeta } from "@/lib/chat-library";
 import { getUserTz } from "@/lib/goal-change";
 import { todayWindow } from "@/lib/time";
+import { getCurrentUser } from "@/lib/session";
 
 // sendChatMessage can make two sequential Anthropic calls (parse + coach) with
 // retries on 429/529. Route-segment maxDuration on the page governs the Server
@@ -13,9 +14,7 @@ export const maxDuration = 120;
 
 export default async function ChatPage() {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
 
   const { data: profile } = await supabase

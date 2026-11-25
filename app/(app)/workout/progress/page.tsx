@@ -3,6 +3,7 @@ import { getUserTz } from "@/lib/goal-change";
 import { localDate } from "@/lib/time";
 import { epley1RM, orientSeries, type ProgressPoint } from "@/lib/training";
 import { loadUnitLabel, type LoadType } from "@/lib/program-schema";
+import { getCurrentUser } from "@/lib/session";
 import {
   ProgressView,
   type ProgressExercise,
@@ -10,9 +11,7 @@ import {
 
 export default async function WorkoutProgressPage() {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
   const tz = await getUserTz(supabase, user.id);
 

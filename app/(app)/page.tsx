@@ -7,6 +7,7 @@ import { addDays, localDayStartISO, todayLocal } from "@/lib/time";
 import { WeightSparkline } from "@/components/app/weight-sparkline";
 import { QuickLog, type QuickLogItem } from "@/components/app/quick-log";
 import { MEALS } from "@/lib/parse-schema";
+import { getCurrentUser } from "@/lib/session";
 
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 
@@ -29,9 +30,7 @@ function localHour(tz: string): number {
 
 export default async function TodayPage() {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
   const tz = await getUserTz(supabase, user.id);
   const today = todayLocal(tz);
@@ -93,24 +92,25 @@ export default async function TodayPage() {
 
   // Session for today + this week's squares
   const next = status?.nextDay ?? null;
-  let exerciseCount = 0;
-  if (next) {
-    const { count } = await supabase
-      .from("program_exercises")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", user.id)
-      .eq("program_day_id", next.id);
-    exerciseCount = count ?? 0;
-  }
-
-  // Avg sleep over this local week (program week if there is one, else last 7 days).
+  // Avg sleep over this local week (program week if there is one, else last 7
+  // days). Fetched together with today's exercise count.
   const sleepFrom = status?.weekStartedOn ?? addDays(today, -6);
-  const { data: sleepRows } = await supabase
-    .from("sleep_logs")
-    .select("duration_min")
-    .eq("user_id", user.id)
-    .gte("slept_on", sleepFrom)
-    .lte("slept_on", today);
+  const [exerciseCount, { data: sleepRows }] = await Promise.all([
+    next
+      ? supabase
+          .from("program_exercises")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .eq("program_day_id", next.id)
+          .then((r) => r.count ?? 0)
+      : Promise.resolve(0),
+    supabase
+      .from("sleep_logs")
+      .select("duration_min")
+      .eq("user_id", user.id)
+      .gte("slept_on", sleepFrom)
+      .lte("slept_on", today),
+  ]);
   const sleepVals = (sleepRows ?? [])
     .map((s) => Number(s.duration_min))
     .filter((n) => Number.isFinite(n) && n > 0);

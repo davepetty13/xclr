@@ -1,5 +1,6 @@
 import { WorkoutNav } from "@/components/app/workout-nav";
 import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/session";
 
 export default async function WorkoutLayout({
   children,
@@ -8,9 +9,7 @@ export default async function WorkoutLayout({
 }) {
   // Pending coach reviews → a small count on the Review tab.
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
   let pending = 0;
   if (user) {
     const { count } = await supabase
