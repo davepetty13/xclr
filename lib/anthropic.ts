@@ -1,16 +1,48 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 
-// Program generation + coaching model. Per the claude-api guidance: default to
-// the latest, most capable Claude model unless a specific one is requested.
-export const PROGRAM_MODEL = "claude-opus-5";
+// v3 model plan (approved by Dave, Nov 2026). Cheap Haiku for everything that
+// happens many times a day; Sonnet for the two rare, long, exact jobs.
+// Pricing source: https://platform.claude.com/docs/en/about-claude/pricing
+export const MODELS = {
+  parse: "claude-haiku-5-5", // reading a log message
+  coach: "claude-haiku-5-5", // answering a question
+  vision: "claude-haiku-5-5", // reading a photo
+  program: "claude-sonnet-5-5", // building a training program (~monthly)
+  review: "claude-sonnet-5-5", // weekly progression review
+} as const;
+
+export type ModelJob = keyof typeof MODELS;
+
+// USD per million tokens. Haiku 5.5's price is for prompts under 100k tokens —
+// Xclr prompts are ~3–8k, so the higher tier never applies.
+const PRICES: Record<string, { in: number; out: number; cacheRead: number; cacheWrite: number }> = {
+  "claude-haiku-5-5": { in: 0.1, out: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+  "claude-sonnet-5-5": { in: 2, out: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+};
+
+export function costUsd(model: string, usage: Anthropic.Usage | null | undefined): number {
+  const p = PRICES[model];
+  if (!p || !usage) return 0;
+  const cacheRead = usage.cache_read_input_tokens ?? 0;
+  const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+  return (
+    (usage.input_tokens * p.in +
+      usage.output_tokens * p.out +
+      cacheRead * p.cacheRead +
+      cacheWrite * p.cacheWrite) /
+    1_000_000
+  );
+}
 
 // Wall-clock budget (seconds) for each AI-calling route. These MUST match the
 // literal `export const maxDuration` on the page that invokes the action
 // (Next needs that value as a literal, so it can't import these):
-//   app/program/page.tsx            → program
+//   app/program/page.tsx              → program
 //   app/(app)/workout/review/page.tsx → review
-//   app/(app)/chat/page.tsx         → chat
+//   app/(app)/workout/page.tsx        → review (review can be generated there)
+//   app/(app)/chat/page.tsx           → chat
+//   app/(app)/photo/page.tsx          → chat (photo reads share the chat budget)
 export const AI_BUDGET_SECONDS = {
   program: 300,
   review: 300,

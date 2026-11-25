@@ -20,28 +20,63 @@ export function LineChart({
   const stepX = (width - pad * 2) / (values.length - 1);
   const coords = values.map(
     (v, i) =>
-      [pad + i * stepX, pad + (1 - (v - min) / span) * (height - pad * 2)] as const
+      [
+        pad + i * stepX,
+        pad + (1 - (v - min) / span) * (height - pad * 2),
+      ] as const,
   );
-  const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const line = coords
+    .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(" ");
   const last = coords[coords.length - 1];
+  // The SVG stretches to its box (preserveAspectRatio="none"), so the end dot is
+  // an HTML element positioned in % — it stays round at any width.
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      width="100%"
-      height={height}
-      role="img"
-      aria-label="Progression chart"
-      preserveAspectRatio="none"
-    >
-      <polyline
-        points={line}
-        fill="none"
-        className="stroke-green"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+    <div className="relative" style={{ height }}>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        width="100%"
+        height={height}
+        role="img"
+        aria-label="Progression chart"
+        preserveAspectRatio="none"
+      >
+        {/* faint guide lines at top / middle / bottom (hairline token) */}
+        {[pad, height / 2, height - pad].map((y) => (
+          <line
+            key={y}
+            x1={0}
+            x2={width}
+            y1={y}
+            y2={y}
+            stroke="var(--hairline)"
+            strokeWidth={1}
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+        <polygon
+          points={`${coords[0][0].toFixed(1)},${height - pad} ${line} ${last[0].toFixed(1)},${height - pad}`}
+          fill="var(--green-soft)"
+          opacity={0.7}
+        />
+        <polyline
+          vectorEffect="non-scaling-stroke"
+          points={line}
+          fill="none"
+          className="stroke-green"
+          strokeWidth={2.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <span
+        aria-hidden="true"
+        className="absolute h-[7px] w-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-green"
+        style={{
+          left: `${(last[0] / width) * 100}%`,
+          top: `${(last[1] / height) * 100}%`,
+        }}
       />
-      <circle cx={last[0]} cy={last[1]} r={3.5} className="fill-green" />
-    </svg>
+    </div>
   );
 }

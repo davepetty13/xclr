@@ -1,6 +1,30 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
-import { anthropic, MissingApiKeyError } from "@/lib/anthropic";
+import { anthropic, costUsd, MissingApiKeyError } from "@/lib/anthropic";
+import type { createClient } from "@/lib/supabase/server";
+
+// Optional: record this call's tokens + cost in ai_usage (Goals → AI usage).
+// Best-effort — a failed usage write never fails the AI call.
+export type UsageTrack = {
+  supabase: ReturnType<typeof createClient>;
+  userId: string;
+  label: string; // parse|coach|vision|program|review
+};
+
+async function recordUsage(track: UsageTrack, model: string, message: Anthropic.Message) {
+  const u = message.usage;
+  const { error } = await track.supabase.from("ai_usage").insert({
+    user_id: track.userId,
+    label: track.label,
+    model,
+    input_tokens: u.input_tokens ?? 0,
+    output_tokens: u.output_tokens ?? 0,
+    cache_read_tokens: u.cache_read_input_tokens ?? 0,
+    cache_write_tokens: u.cache_creation_input_tokens ?? 0,
+    cost_usd: Number(costUsd(model, u).toFixed(6)),
+  });
+  if (error) console.error(`[ai_usage] ${error.message}`);
+}
 
 export type AiFailureKind =
   | "config"
@@ -108,7 +132,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // label + attempt + kind + status + message — never swallowed.
 export async function createMessage(
   params: Anthropic.MessageCreateParamsNonStreaming,
-  opts: { label: string; deadline: number }
+  opts: { label: string; deadline: number; track?: UsageTrack }
 ): Promise<AiCallResult> {
   let last: Classified | null = null;
   let attempts = 0;
@@ -129,6 +153,11 @@ export async function createMessage(
       });
       if (attempt > 1)
         console.warn(`[ai:${opts.label}] succeeded on attempt ${attempt}`);
+      const u = message.usage;
+      console.info(
+        `[ai:${opts.label}] model=${params.model} in=${u.input_tokens} out=${u.output_tokens} cache_read=${u.cache_read_input_tokens ?? 0} cost=$${costUsd(params.model, u).toFixed(5)}`
+      );
+      if (opts.track) await recordUsage(opts.track, params.model, message);
       return { ok: true, message };
     } catch (err) {
       last = classify(err);

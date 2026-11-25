@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { getUserTz } from "@/lib/goal-change";
 import { epley1RM } from "@/lib/training";
 import { formatLoad, type LoadType } from "@/lib/program-schema";
 
@@ -8,6 +9,7 @@ export default async function WorkoutHistoryPage() {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
+  const tz = await getUserTz(supabase, user.id);
 
   const { data: sessions } = await supabase
     .from("workout_sessions")
@@ -65,7 +67,7 @@ export default async function WorkoutHistoryPage() {
 
   if (!sessionList.length)
     return (
-      <p className="rounded-tile border border-line bg-card p-4 text-sm font-medium text-muted">
+      <p className="glass p-4 text-sm font-medium text-muted">
         No sessions yet. Log one from Today and it shows up here.
       </p>
     );
@@ -74,10 +76,13 @@ export default async function WorkoutHistoryPage() {
     <div className="space-y-3">
       {sessionList.map((sess) => {
         const sets = bySession.get(sess.id as string) ?? [];
-        const volume = sets.reduce(
-          (sum, r) => sum + (r.load != null && r.reps != null ? r.load * r.reps : 0),
-          0
-        );
+        // Volume counts real external load only: total kg, and per-side kg × 2.
+        const volume = sets.reduce((sum, r) => {
+          if (r.load == null || r.reps == null) return sum;
+          if (r.type === "total_kg") return sum + r.load * r.reps;
+          if (r.type === "per_side_kg") return sum + r.load * 2 * r.reps;
+          return sum;
+        }, 0);
         // Group by exercise for a compact summary.
         const byEx = new Map<string, SetRow[]>();
         for (const r of sets) {
@@ -87,21 +92,24 @@ export default async function WorkoutHistoryPage() {
         }
         const date = new Date(sess.performed_at as string).toLocaleDateString(
           undefined,
-          { weekday: "short", month: "short", day: "numeric" }
+          { weekday: "short", month: "short", day: "numeric", timeZone: tz }
         );
         return (
-          <div key={sess.id as string} className="rounded-tile border border-line bg-card p-4">
-            <div className="flex items-baseline justify-between">
-              <span className="text-sm font-semibold capitalize text-ink">
+          <section key={sess.id as string} className="glass px-4 py-3.5">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-[15px] font-bold capitalize text-ink">
                 {(sess.type as string | null) ?? "Session"} · {date}
-              </span>
+              </h2>
               {volume > 0 ? (
-                <span className="tnum text-xs font-medium text-muted">
-                  {Math.round(volume)} kg vol
+                <span className="shrink-0 text-xs font-medium text-muted">
+                  <span className="tnum font-display text-sm font-bold text-ink">
+                    {Math.round(volume)}
+                  </span>{" "}
+                  kg vol
                 </span>
               ) : null}
             </div>
-            <ul className="mt-2 space-y-1.5">
+            <ul className="mt-1">
               {Array.from(byEx.entries()).map(([exId, rows]) => {
                 const isPr = prPair.has(`${sess.id as string}:${exId}`);
                 const summary = rows
@@ -112,26 +120,27 @@ export default async function WorkoutHistoryPage() {
                   .filter((x) => x.trim())
                   .join(", ");
                 return (
-                  <li key={exId} className="flex items-baseline justify-between gap-3">
-                    <span className="text-sm font-medium text-ink">
+                  <li
+                    key={exId}
+                    className="flex min-h-[40px] items-center justify-between gap-3 border-b border-hairline py-1.5 last:border-b-0"
+                  >
+                    <span className="flex items-center gap-1.5 text-sm font-semibold text-ink">
                       {nameById.get(exId) ?? "Exercise"}
-                      {isPr ? (
-                        <span className="ml-1 rounded-chip bg-green-soft px-1.5 py-0.5 text-[10px] font-semibold text-green">
-                          PR
-                        </span>
-                      ) : null}
+                      {isPr ? <span className="mark mark-green">PR</span> : null}
                     </span>
-                    <span className="tnum shrink-0 text-sm text-muted">{summary}</span>
+                    <span className="tnum shrink-0 text-right font-display text-[13px] font-semibold text-ink">
+                      {summary}
+                    </span>
                   </li>
                 );
               })}
             </ul>
             {sess.my_note ? (
-              <p className="mt-2 text-sm font-medium text-muted">
+              <p className="mt-2 text-[13px] font-medium text-muted">
                 &ldquo;{sess.my_note as string}&rdquo;
               </p>
             ) : null}
-          </div>
+          </section>
         );
       })}
     </div>

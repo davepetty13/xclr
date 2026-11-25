@@ -1,5 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
+import { getUserTz } from "@/lib/goal-change";
+import { localDate } from "@/lib/time";
 import { epley1RM, orientSeries, type ProgressPoint } from "@/lib/training";
+import { loadUnitLabel, type LoadType } from "@/lib/program-schema";
 import {
   ProgressView,
   type ProgressExercise,
@@ -11,6 +14,7 @@ export default async function WorkoutProgressPage() {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
+  const tz = await getUserTz(supabase, user.id);
 
   const { data: setLogs } = await supabase
     .from("set_logs")
@@ -27,7 +31,7 @@ export default async function WorkoutProgressPage() {
 
   const dateBySession = new Map<string, string>();
   for (const s of sessions ?? [])
-    dateBySession.set(s.id as string, (s.performed_at as string).slice(0, 10));
+    dateBySession.set(s.id as string, localDate(tz, new Date(s.performed_at as string)));
   const nameById = new Map<string, string>();
   for (const e of exRows ?? []) nameById.set(e.id as string, e.name as string);
 
@@ -57,11 +61,16 @@ export default async function WorkoutProgressPage() {
   for (const [exId, g] of Array.from(groups.entries())) {
     const predominant =
       Object.entries(g.typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "none";
-    const inverted = predominant === "assist_kg";
+    // Only loaded series chart as strength: time, bodyweight and unloaded sets don't.
+    if (predominant !== "total_kg" && predominant !== "per_side_kg" && predominant !== "assist_kg")
+      continue;
+    const loadType = predominant as LoadType;
+    const inverted = loadType === "assist_kg";
 
     // Best value per day: assist → lowest assist load; else → highest est 1RM.
     const byDay = new Map<string, number[]>();
     for (const s of g.sets) {
+      if ((s.type ?? "none") !== loadType) continue;
       const v = inverted ? s.load : epley1RM(s.load, s.reps);
       if (v == null) continue;
       const list = byDay.get(s.day) ?? [];
@@ -81,7 +90,8 @@ export default async function WorkoutProgressPage() {
       id: exId,
       name: nameById.get(exId) ?? "Exercise",
       inverted: oriented.inverted,
-      unitLabel: inverted ? "Assist load (kg)" : "Estimated 1RM (kg)",
+      loadType,
+      unitLabel: inverted ? "Assist load (kg)" : `Estimated 1RM (${loadUnitLabel(loadType)})`,
       values: oriented.points.map((p) => p.value),
     });
   }

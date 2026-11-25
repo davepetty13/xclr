@@ -20,16 +20,17 @@ export function UnitToggle({ unit }: { unit: "kg" | "lbs" }) {
   }
 
   return (
-    <div className="flex gap-1 rounded-chip border border-line bg-paper p-1">
+    <div role="radiogroup" aria-label="Units" className="flex rounded-control bg-segment p-0.5">
       {(["kg", "lbs"] as const).map((u) => (
         <button
           key={u}
           type="button"
+          role="radio"
           disabled={busy}
           onClick={() => void choose(u)}
-          aria-pressed={value === u}
-          className={`flex-1 rounded-tile px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-60 ${
-            value === u ? "bg-card text-ink shadow-card" : "text-muted"
+          aria-checked={value === u}
+          className={`min-h-[44px] rounded-lg px-3.5 text-xs transition-colors disabled:opacity-60 ${
+            value === u ? "bg-ink font-bold text-card" : "font-semibold text-muted"
           }`}
         >
           {u}

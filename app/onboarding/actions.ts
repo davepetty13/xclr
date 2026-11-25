@@ -2,6 +2,8 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { lbsToKg } from "@/lib/units";
+import { getUserTz } from "@/lib/goal-change";
+import { todayLocal } from "@/lib/time";
 import {
   DEFAULT_COACH_PERSONA,
   type OnboardingPayload,
@@ -17,8 +19,9 @@ import {
   EQUIPMENT_ACCESS_VALUES,
 } from "@/lib/onboarding-options";
 
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+// The user's local calendar date (profile timezone, default Asia/Manila).
+async function todayISO(supabase: ReturnType<typeof createClient>, userId: string): Promise<string> {
+  return todayLocal(await getUserTz(supabase, userId));
 }
 
 // Persists the onboarding profile. Identity is derived server-side from the
@@ -124,7 +127,7 @@ export async function submitOnboarding(
   const { error: weightErr } = await supabase
     .from("weights")
     .upsert(
-      { user_id: user.id, measured_on: todayISO(), kg: currentKg },
+      { user_id: user.id, measured_on: await todayISO(supabase, user.id), kg: currentKg },
       { onConflict: "user_id,measured_on" }
     );
   if (weightErr) return { ok: false, error: "Couldn't save your weight. Try again." };

@@ -1,10 +1,14 @@
 import type { Metadata } from "next";
-import { Fraunces, Hanken_Grotesk } from "next/font/google";
+import { Sora, Hanken_Grotesk } from "next/font/google";
 import "./globals.css";
 
-const fraunces = Fraunces({
+// v3: Sora for big numbers + headings (Dave's pick, option E), Hanken Grotesk
+// for everything else. Sora is exposed as both --font-display and the legacy
+// --font-serif, so existing `font-serif` classes switch over automatically.
+const sora = Sora({
   subsets: ["latin"],
-  variable: "--font-serif",
+  weight: ["600", "700"],
+  variable: "--font-display",
   display: "swap",
 });
 
@@ -26,7 +30,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${fraunces.variable} ${hanken.variable} font-sans`}>
+      <body className={`${sora.variable} ${hanken.variable} font-sans`}>
         {children}
       </body>
     </html>

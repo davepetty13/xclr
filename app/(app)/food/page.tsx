@@ -1,11 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { FoodTab } from "@/components/app/food-tab";
-
-function startOfTodayISO(): string {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d.toISOString();
-}
+import { getUserTz } from "@/lib/goal-change";
+import { todayWindow } from "@/lib/time";
 
 export default async function FoodPage() {
   const supabase = createClient();
@@ -14,11 +10,21 @@ export default async function FoodPage() {
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data: foods } = await supabase
+  // Local midnight in the user's timezone (not UTC — that reset at 8 AM Manila).
+  const tz = await getUserTz(supabase, user.id);
+  const win = todayWindow(tz);
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("daily_calorie_target, daily_protein_target")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  const { data: foods, error: foodsError } = await supabase
     .from("food_logs")
     .select("id, name, serving, meal, kcal, protein_g, carbs_g, fat_g, is_estimate")
     .eq("user_id", user.id)
-    .gte("logged_at", startOfTodayISO())
+    .gte("logged_at", win.start)
     .order("logged_at", { ascending: true });
 
   const { data: library } = await supabase
@@ -28,8 +34,19 @@ export default async function FoodPage() {
     .order("times_logged", { ascending: false })
     .limit(12);
 
+  const dateLabel = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+    timeZone: tz,
+  });
+
   return (
     <FoodTab
+      dateLabel={dateLabel}
+      loadError={!!foodsError}
+      calTarget={Number(profile?.daily_calorie_target) || 2200}
+      proteinTarget={Number(profile?.daily_protein_target) || 150}
       foods={(foods ?? []).map((f) => ({
         id: f.id as string,
         name: f.name as string,

@@ -34,25 +34,25 @@ export function WizardShell({
   error?: string | null;
 }) {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col px-5 py-6">
+    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 py-6">
       <div className="flex items-center gap-1.5" aria-hidden="true">
         {Array.from({ length: total }).map((_, i) => (
           <span
             key={i}
-            className={`h-1.5 flex-1 rounded-chip ${i <= step ? "bg-green" : "bg-line"}`}
+            className={`h-1.5 flex-1 rounded-chip ${i <= step ? "bg-green" : "bg-hairline"}`}
           />
         ))}
       </div>
-      <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-faint">
+      <p className="mt-3 px-1 text-xs font-semibold uppercase tracking-[0.14em] text-muted">
         {eyebrow ?? `Step ${step + 1} of ${total}`}
       </p>
 
       <div className="mt-2 flex-1">
-        <h1 className="font-serif text-3xl font-medium tracking-tight text-ink">
+        <h1 className="px-1 font-display text-[26px] font-bold leading-tight tracking-[-0.02em] text-ink">
           {title}
         </h1>
         {subtitle ? (
-          <p className="mt-2 text-sm font-medium text-muted">{subtitle}</p>
+          <p className="mt-2 px-1 text-sm font-medium text-muted">{subtitle}</p>
         ) : null}
         <div className="mt-6 space-y-4">{children}</div>
       </div>
@@ -60,7 +60,7 @@ export function WizardShell({
       {error ? (
         <p
           role="alert"
-          className="mt-4 rounded-chip border border-ember bg-ember-soft px-4 py-3 text-sm font-medium text-ink"
+          className="mt-4 pop !rounded-tile px-4 py-3 text-sm font-medium text-ink shadow-[inset_3px_0_0_var(--ember),var(--shadow-pop)]"
         >
           {error}
         </p>
@@ -72,7 +72,7 @@ export function WizardShell({
             type="button"
             onClick={onBack}
             disabled={busy}
-            className="rounded-chip border border-line bg-card px-5 py-3 text-sm font-semibold text-ink transition-opacity hover:opacity-80 disabled:opacity-50"
+            className="btn-secondary px-5 text-sm"
           >
             Back
           </button>
@@ -81,7 +81,7 @@ export function WizardShell({
           type="button"
           onClick={onNext}
           disabled={nextDisabled || busy}
-          className="flex-1 rounded-chip bg-green px-5 py-3 text-sm font-semibold text-card transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="btn-primary flex-1 px-5 text-sm"
         >
           {busy ? "Saving…" : nextLabel}
         </button>
@@ -91,7 +91,7 @@ export function WizardShell({
           type="button"
           onClick={onSkip}
           disabled={busy}
-          className="mt-3 py-3 text-center text-sm font-semibold text-muted transition-opacity hover:opacity-80 disabled:opacity-50"
+          className="mt-3 min-h-[44px] text-center text-sm font-semibold text-muted transition-opacity hover:opacity-80 disabled:opacity-50"
         >
           Skip for now
         </button>

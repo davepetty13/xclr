@@ -1,7 +1,7 @@
 import "server-only";
 import type Anthropic from "@anthropic-ai/sdk";
-import { PROGRAM_MODEL } from "@/lib/anthropic";
-import { createMessage } from "@/lib/ai-call";
+import { MODELS, type ModelJob } from "@/lib/anthropic";
+import { createMessage, type UsageTrack } from "@/lib/ai-call";
 
 export type AiJsonResult = { ok: true; data: unknown } | { ok: false; error: string };
 
@@ -15,24 +15,33 @@ export type AiJsonResult = { ok: true; data: unknown } | { ok: false; error: str
 // constraint, so the same schema is accepted and the model still returns a clean
 // object in tool_use.input. Callers validate/normalize that object themselves.
 //
+// `job` picks the model from the v3 plan (lib/anthropic.ts MODELS). The system
+// prompt is sent as a cacheable block: when it's long enough to qualify, repeat
+// calls read it from cache at a tenth of the price.
+//
+// `user` may be plain text or content blocks (e.g. an image + text for photo reads).
+//
 // Errors are never swallowed silently — every failure (API error, refusal,
 // truncation, missing tool call) is logged with its status/reason to the
 // server console, and the caller gets a failure-specific message. Transient
 // API errors are retried within the route's time budget (lib/ai-call.ts).
 export async function generateJson(opts: {
+  job: ModelJob;
   system: string;
-  user: string;
+  user: string | Anthropic.ContentBlockParam[];
   schema: object;
   toolName: string;
   maxTokens: number;
   deadline: number;
   effort?: "low" | "medium" | "high";
+  track?: Omit<UsageTrack, "label">;
 }): Promise<AiJsonResult> {
+  const model = MODELS[opts.job];
   const r = await createMessage(
     {
-      model: PROGRAM_MODEL,
+      model,
       max_tokens: opts.maxTokens,
-      system: opts.system,
+      system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
       ...(opts.effort ? { output_config: { effort: opts.effort } } : {}),
       tools: [
         {
@@ -44,7 +53,11 @@ export async function generateJson(opts: {
       tool_choice: { type: "tool", name: opts.toolName },
       messages: [{ role: "user", content: opts.user }],
     },
-    { label: `generateJson:${opts.toolName}`, deadline: opts.deadline }
+    {
+      label: `generateJson:${opts.toolName}`,
+      deadline: opts.deadline,
+      track: opts.track ? { ...opts.track, label: opts.job } : undefined,
+    }
   );
   if (!r.ok) return { ok: false, error: r.error };
   const message = r.message;

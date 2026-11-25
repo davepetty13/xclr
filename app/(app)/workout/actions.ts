@@ -5,6 +5,8 @@ import { generateJson } from "@/lib/ai-json";
 import { AI_BUDGET_SECONDS } from "@/lib/anthropic";
 import { deadlineAfter } from "@/lib/ai-call";
 import { getActiveProgram } from "@/lib/programs";
+import { getUserTz } from "@/lib/goal-change";
+import { addDays, localDayStartISO, todayLocal } from "@/lib/time";
 import {
   PROPOSAL_JSON_SCHEMA,
   validateProposal,
@@ -29,11 +31,74 @@ export type SetInput = {
   rpe: number | null;
 };
 
-function weekStartISO(): string {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  d.setUTCDate(d.getUTCDate() - 6);
-  return d.toISOString();
+export type NewWeekResult =
+  | { ok: true; week: number; hasProposal: boolean; reviewFrom: string }
+  | { ok: false; error: string };
+
+type Supa = ReturnType<typeof createClient>;
+
+// The active program's week fields, scoped to the caller.
+async function loadWeek(supabase: Supa, userId: string, programId: string, tz: string) {
+  const { data } = await supabase
+    .from("programs")
+    .select("current_week, week_started_on, week_start")
+    .eq("id", programId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  return {
+    week: Number(data?.current_week) || 1,
+    startedOn:
+      (data?.week_started_on as string | null) ??
+      (data?.week_start as string | null) ??
+      todayLocal(tz),
+  };
+}
+
+// Begin the next training week (local today). Repeat keeps the week number;
+// fresh moves to N+1. Unfinished days simply stay unlogged (history shows them
+// as skipped). Pending coach changes are NEVER applied here.
+async function advanceWeek(
+  supabase: Supa,
+  userId: string,
+  programId: string,
+  mode: "repeat" | "fresh",
+  tz: string
+): Promise<{ ok: true; week: number; previousStart: string } | { ok: false }> {
+  const cur = await loadWeek(supabase, userId, programId, tz);
+  const week = mode === "fresh" ? cur.week + 1 : cur.week;
+  const { error } = await supabase
+    .from("programs")
+    .update({ current_week: week, week_started_on: todayLocal(tz) })
+    .eq("id", programId)
+    .eq("user_id", userId);
+  if (error) return { ok: false };
+  return { ok: true, week, previousStart: cur.startedOn };
+}
+
+// "Start a new week" — the user picks Repeat week N or Fresh week N+1.
+export async function startNewWeek(mode: "repeat" | "fresh"): Promise<NewWeekResult> {
+  if (mode !== "repeat" && mode !== "fresh") return { ok: false, error: "Pick repeat or fresh." };
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "You're signed out." };
+
+  const program = await getActiveProgram(supabase, user.id);
+  if (!program) return { ok: false, error: "No active program yet." };
+  const tz = await getUserTz(supabase, user.id);
+
+  const r = await advanceWeek(supabase, user.id, program.id, mode, tz);
+  if (!r.ok) return { ok: false, error: "Couldn't start the new week." };
+
+  const { count } = await supabase
+    .from("progression_proposals")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id)
+    .eq("program_id", program.id)
+    .eq("status", "pending");
+
+  return { ok: true, week: r.week, hasProposal: (count ?? 0) > 0, reviewFrom: r.previousStart };
 }
 
 // Log a session's actual sets against a prescribed program day.
@@ -48,29 +113,66 @@ export async function logSession(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "You're signed out." };
+  const note = typeof myNote === "string" ? myNote.trim().slice(0, 1000) : "";
+  const sessionType = typeof type === "string" ? type.slice(0, 40) : null;
 
   // Only keep sets the user actually logged (reps or load present).
   const real = (sets ?? []).filter(
     (s) => s.exercise_id && (s.reps != null || s.load_value != null)
   );
-  if (!real.length && !myNote.trim())
+  if (!real.length && !note)
     return { ok: false, error: "Log at least one set first." };
+
+  // The day must belong to the caller's ACTIVE program.
+  const program = await getActiveProgram(supabase, user.id);
+  if (!program) return { ok: false, error: "No active program yet." };
+  const { data: dayRow } = await supabase
+    .from("program_days")
+    .select("id")
+    .eq("id", programDayId)
+    .eq("user_id", user.id)
+    .eq("program_id", program.id)
+    .maybeSingle();
+  if (!dayRow) return { ok: false, error: "That day isn't in your current program. Refresh and try again." };
+
+  // Sets may only reference the caller's own exercises; numbers are clamped.
+  const { data: ownEx } = await supabase
+    .from("exercises")
+    .select("id")
+    .eq("user_id", user.id)
+    .in("id", Array.from(new Set(real.map((s) => s.exercise_id))));
+  const ownIds = new Set((ownEx ?? []).map((e) => e.id as string));
+  const LOAD_TYPES = new Set(["total_kg", "per_side_kg", "assist_kg", "bodyweight", "time_min", "none"]);
+  const clamp = (v: number | null, lo: number, hi: number) =>
+    v == null || !Number.isFinite(v) ? null : Math.min(hi, Math.max(lo, v));
+  const safeSets = real
+    .filter((s) => ownIds.has(s.exercise_id))
+    .map((s) => ({
+      ...s,
+      set_index: Math.round(clamp(s.set_index, 1, 50) ?? 1),
+      load_value: clamp(s.load_value, 0, 1000),
+      load_type: s.load_type && LOAD_TYPES.has(s.load_type) ? s.load_type : null,
+      reps: s.reps == null ? null : Math.round(clamp(s.reps, 0, 1000) ?? 0),
+      rpe: clamp(s.rpe, 0, 10),
+    }));
+  if (real.length && !safeSets.length)
+    return { ok: false, error: "Those exercises aren't in your program. Refresh and try again." };
 
   const { data: session, error: sErr } = await supabase
     .from("workout_sessions")
     .insert({
       user_id: user.id,
       program_day_id: programDayId,
-      type,
-      my_note: myNote.trim() || null,
+      type: sessionType,
+      my_note: note || null,
       performed_at: new Date().toISOString(),
     })
     .select("id")
     .single();
   if (sErr || !session) return { ok: false, error: "Couldn't start the session." };
 
-  if (real.length) {
-    const rows = real.map((s) => ({
+  if (safeSets.length) {
+    const rows = safeSets.map((s) => ({
       user_id: user.id,
       session_id: session.id as string,
       exercise_id: s.exercise_id,
@@ -81,14 +183,26 @@ export async function logSession(
       actual_rpe: s.rpe,
     }));
     const { error: setErr } = await supabase.from("set_logs").insert(rows);
-    if (setErr) return { ok: false, error: "Couldn't save your sets." };
+    if (setErr) {
+      // Don't leave an empty session behind that would mark the day done.
+      await supabase
+        .from("workout_sessions")
+        .delete()
+        .eq("id", session.id as string)
+        .eq("user_id", user.id);
+      return { ok: false, error: "Couldn't save your sets. Nothing was logged — try again." };
+    }
   }
   return { ok: true };
 }
 
-// Generate this week's progression proposal (Doc 02 §4). Never auto-applies —
+// Generate the week's progression proposal (Doc 02 §4). Never auto-applies —
 // it writes a pending proposal + items the user reviews.
-export async function generateWeeklyReview(): Promise<SimpleResult> {
+//
+// Window: the current training week (local midnight of week_started_on → now).
+// `reviewFrom` (the previous week's start, handed back by startNewWeek) reviews
+// the week that just ended instead: reviewFrom → start of the current week.
+export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleResult> {
   const deadline = deadlineAfter(AI_BUDGET_SECONDS.review);
   const supabase = createClient();
   const {
@@ -98,6 +212,23 @@ export async function generateWeeklyReview(): Promise<SimpleResult> {
 
   const program = await getActiveProgram(supabase, user.id);
   if (!program) return { ok: false, error: "No active program to review." };
+  const tz = await getUserTz(supabase, user.id);
+  const wk = await loadWeek(supabase, user.id, program.id, tz);
+
+  let fromDate = wk.startedOn;
+  let toISO: string | null = null; // null = up to now
+  let toDate: string | null = null;
+  if (
+    typeof reviewFrom === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(reviewFrom) &&
+    reviewFrom < wk.startedOn &&
+    reviewFrom >= addDays(wk.startedOn, -42)
+  ) {
+    fromDate = reviewFrom;
+    toDate = wk.startedOn;
+    toISO = localDayStartISO(wk.startedOn, tz);
+  }
+  const fromISO = localDayStartISO(fromDate, tz);
 
   const { data: days } = await supabase
     .from("program_days")
@@ -124,12 +255,23 @@ export async function generateWeeklyReview(): Promise<SimpleResult> {
   const nameById = new Map<string, string>();
   for (const e of exRows ?? []) nameById.set(e.id as string, e.name as string);
 
-  // This week's actuals by exercise_id.
+  // The week's sessions (and their notes), then their sets.
+  let sessQ = supabase
+    .from("workout_sessions")
+    .select("id, my_note")
+    .eq("user_id", user.id)
+    .gte("performed_at", fromISO);
+  if (toISO) sessQ = sessQ.lt("performed_at", toISO);
+  const { data: sessRows } = await sessQ;
+  const sessionIds = (sessRows ?? []).map((r) => r.id as string);
+  if (!sessionIds.length)
+    return { ok: false, error: "No sessions logged this week yet. Log a workout first." };
+
   const { data: setLogs } = await supabase
     .from("set_logs")
     .select("exercise_id, actual_load_value, actual_reps, actual_rpe")
     .eq("user_id", user.id)
-    .gte("created_at", weekStartISO());
+    .in("session_id", sessionIds);
   const actualsByEx = new Map<
     string,
     { load_value: number | null; reps: number | null; rpe: number | null }[]
@@ -162,21 +304,17 @@ export async function generateWeeklyReview(): Promise<SimpleResult> {
     };
   });
 
-  const { data: notesRows } = await supabase
-    .from("workout_sessions")
-    .select("my_note")
-    .eq("user_id", user.id)
-    .gte("performed_at", weekStartISO())
-    .not("my_note", "is", null);
-  const notes = (notesRows ?? [])
+  const notes = (sessRows ?? [])
     .map((n) => (n.my_note as string | null)?.trim())
     .filter((n): n is string => !!n);
 
-  const { data: sleepRows } = await supabase
+  let sleepQ = supabase
     .from("sleep_logs")
     .select("duration_min")
     .eq("user_id", user.id)
-    .gte("slept_on", weekStartISO().slice(0, 10));
+    .gte("slept_on", fromDate);
+  if (toDate) sleepQ = sleepQ.lt("slept_on", toDate);
+  const { data: sleepRows } = await sleepQ;
   const sleepVals = (sleepRows ?? [])
     .map((s) => Number(s.duration_min))
     .filter((n) => Number.isFinite(n) && n > 0);
@@ -206,6 +344,7 @@ export async function generateWeeklyReview(): Promise<SimpleResult> {
   };
 
   const r = await generateJson({
+    job: "review",
     system: REVIEW_SYSTEM_PROMPT,
     user: buildReviewUserMessage(ctx),
     schema: PROPOSAL_JSON_SCHEMA,
@@ -213,32 +352,28 @@ export async function generateWeeklyReview(): Promise<SimpleResult> {
     maxTokens: 8000,
     deadline,
     effort: "medium",
+    track: { supabase, userId: user.id },
   });
   if (!r.ok) return { ok: false, error: r.error };
   const parsed = validateProposal(r.data, exercises.length);
   if (!parsed.ok) return { ok: false, error: parsed.error };
   const proposal = parsed.proposal;
 
-  // Replace any existing pending proposal for this program.
-  await supabase
-    .from("progression_proposals")
-    .delete()
-    .eq("user_id", user.id)
-    .eq("program_id", program.id)
-    .eq("status", "pending");
-
+  // Save the NEW proposal first. Old pending proposals are only removed once
+  // the new one (and all its items) saved — a failure never loses a review.
   const { data: propRow, error: pErr } = await supabase
     .from("progression_proposals")
     .insert({
       user_id: user.id,
       program_id: program.id,
-      week_start: weekStartISO().slice(0, 10),
+      week_start: fromDate,
       status: "pending",
       summary: proposal.summary,
     })
     .select("id")
     .single();
   if (pErr || !propRow) return { ok: false, error: "Couldn't save the review." };
+  const newId = propRow.id as string;
 
   const itemRows = proposal.items
     .map((it) => {
@@ -246,10 +381,11 @@ export async function generateWeeklyReview(): Promise<SimpleResult> {
       if (!progExId) return null;
       return {
         user_id: user.id,
-        proposal_id: propRow.id as string,
+        proposal_id: newId,
         program_exercise_id: progExId,
         field: it.field,
-        old_value: it.old_value,
+        // The CURRENT value always comes from the program, never the model.
+        old_value: currentValue(progEx[it.ref] as Record<string, unknown> | undefined, it.field),
         new_value: it.new_value,
         rationale: it.rationale,
       };
@@ -259,17 +395,41 @@ export async function generateWeeklyReview(): Promise<SimpleResult> {
     const { error: itemErr } = await supabase
       .from("proposal_items")
       .insert(itemRows);
-    if (itemErr) return { ok: false, error: "Couldn't save the review items." };
+    if (itemErr) {
+      await supabase
+        .from("progression_proposals")
+        .delete()
+        .eq("id", newId)
+        .eq("user_id", user.id);
+      return { ok: false, error: "Couldn't save the review items. Your earlier review is unchanged." };
+    }
   }
+
+  await supabase
+    .from("progression_proposals")
+    .delete()
+    .eq("user_id", user.id)
+    .eq("program_id", program.id)
+    .eq("status", "pending")
+    .neq("id", newId);
 
   return { ok: true };
 }
 
 // Apply approved items to the program, mark the proposal decided. Items not in
 // approvedItemIds are kept as-is (no change). Nothing auto-applies.
+// startNextWeek is kept for call compatibility and ignored: starting a week is
+// always the user's separate Repeat / Fresh choice.
+function currentValue(row: Record<string, unknown> | undefined, field: string): string {
+  if (!row) return "";
+  const v = row[field];
+  return v == null ? "" : String(v);
+}
+
 export async function applyProposal(
   proposalId: string,
-  approvedItemIds: string[]
+  approvedItemIds: string[],
+  startNextWeek = false
 ): Promise<SimpleResult> {
   const supabase = createClient();
   const {
@@ -277,16 +437,17 @@ export async function applyProposal(
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "You're signed out." };
 
-  // Only a still-pending proposal can be decided (guards double-apply).
-  const { data: prop } = await supabase
+  // Claim the proposal in ONE conditional update (pending → applying) so a
+  // double tap can't apply it twice.
+  const { data: claimed } = await supabase
     .from("progression_proposals")
-    .select("status")
+    .update({ status: "applying" })
     .eq("id", proposalId)
     .eq("user_id", user.id)
-    .maybeSingle();
-  if (!prop) return { ok: false, error: "That review is gone." };
-  if (prop.status !== "pending")
-    return { ok: false, error: "That review was already decided." };
+    .eq("status", "pending")
+    .select("status, program_id, week_start");
+  const prop = claimed?.[0];
+  if (!prop) return { ok: false, error: "That review was already decided, or it's gone." };
 
   // Load the proposal's items (RLS-scoped) so a client can't apply arbitrary rows.
   const { data: items } = await supabase
@@ -294,9 +455,14 @@ export async function applyProposal(
     .select("id, program_exercise_id, field, new_value")
     .eq("user_id", user.id)
     .eq("proposal_id", proposalId);
-  if (!items) return { ok: false, error: "That review is gone." };
+  if (!items) {
+    await supabase.from("progression_proposals").update({ status: "pending" }).eq("id", proposalId).eq("user_id", user.id);
+    return { ok: false, error: "That review is gone." };
+  }
 
   const approved = new Set(approvedItemIds);
+  let appliedItems = 0;
+  let failedItems = 0;
   for (const it of items) {
     if (!approved.has(it.id as string)) continue;
     const coerced = coerceFieldValue(
@@ -304,19 +470,35 @@ export async function applyProposal(
       it.new_value as string
     );
     if (!coerced) continue;
-    await supabase
+    const { error: upErr } = await supabase
       .from("program_exercises")
       .update({ [coerced.column]: coerced.value })
       .eq("id", it.program_exercise_id as string)
       .eq("user_id", user.id);
+    if (upErr) {
+      console.error(`[applyProposal] item ${it.id}: ${upErr.message}`);
+      failedItems++;
+    } else appliedItems++;
+  }
+  if (failedItems) {
+    // Leave it pending so the user can try again; say plainly what happened.
+    await supabase.from("progression_proposals").update({ status: "pending" }).eq("id", proposalId).eq("user_id", user.id);
+    return {
+      ok: false,
+      error: `${appliedItems} change${appliedItems === 1 ? "" : "s"} saved, ${failedItems} didn't. Try again.`,
+    };
   }
 
   const { error: decErr } = await supabase
     .from("progression_proposals")
-    .update({ status: "approved", decided_at: new Date().toISOString() })
+    .update({ status: appliedItems ? "approved" : "rejected", decided_at: new Date().toISOString() })
     .eq("id", proposalId)
     .eq("user_id", user.id);
   if (decErr) return { ok: false, error: "Couldn't finalize the review." };
+
+  // Deciding a review never starts a week by itself: the user picks
+  // Repeat or Fresh separately (decision 4). `startNextWeek` is ignored.
+  void startNextWeek;
 
   return { ok: true };
 }

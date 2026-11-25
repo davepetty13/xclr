@@ -4,6 +4,7 @@
 // needs_clarification set, everything else null, and NOTHING is written.
 
 import { LOAD_TYPES, type LoadType } from "@/lib/program-schema";
+import { GOALS, isGoal, type Goal } from "@/lib/goal-change";
 
 export const MEALS = ["breakfast", "brunch", "lunch", "dinner", "snack"] as const;
 
@@ -30,11 +31,27 @@ export type ParsedWorkout = { type: string | null; sets: ParsedSet[] };
 
 export type ParsedSleep = { duration_min: number | null; quality: number | null };
 
+export const HEALTH_ACTIONS = ["add", "update", "resolve"] as const;
+export type HealthAction = (typeof HEALTH_ACTIONS)[number];
+
+export type ParsedGoalChange = { goal: Goal; goal_weight_kg: number | null };
+export type ParsedHealthUpdate = {
+  condition: string;
+  notes: string | null;
+  action: HealthAction;
+};
+
 export type ParsedInput = {
   foods: ParsedFood[];
   workout: ParsedWorkout | null;
   sleep: ParsedSleep | null;
   weight_kg: number | null;
+  // Which local day the logs belong to: "today" | "yesterday" | "YYYY-MM-DD" | null (= today).
+  log_date: string | null;
+  // True when the message asks something or wants conversation (the coach answers).
+  is_question: boolean;
+  goal_change: ParsedGoalChange | null;
+  health_update: ParsedHealthUpdate | null;
   needs_clarification: string | null;
 };
 
@@ -104,9 +121,40 @@ export const PARSE_JSON_SCHEMA = {
       required: ["duration_min", "quality"],
     },
     weight_kg: { type: ["number", "null"] },
+    log_date: { type: ["string", "null"] },
+    is_question: { type: "boolean" },
+    goal_change: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      properties: {
+        goal: { type: "string", enum: [...GOALS] },
+        goal_weight_kg: { type: ["number", "null"] },
+      },
+      required: ["goal", "goal_weight_kg"],
+    },
+    health_update: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      properties: {
+        condition: { type: "string" },
+        notes: { type: ["string", "null"] },
+        action: { type: "string", enum: [...HEALTH_ACTIONS] },
+      },
+      required: ["condition", "notes", "action"],
+    },
     needs_clarification: { type: ["string", "null"] },
   },
-  required: ["foods", "workout", "sleep", "weight_kg", "needs_clarification"],
+  required: [
+    "foods",
+    "workout",
+    "sleep",
+    "weight_kg",
+    "log_date",
+    "is_question",
+    "goal_change",
+    "health_update",
+    "needs_clarification",
+  ],
 } as const;
 
 function num(v: unknown): number | null {
@@ -184,11 +232,44 @@ export function normalizeParse(input: unknown): ParsedInput {
       sleep = { duration_min: duration, quality };
   }
 
+  let goal_change: ParsedGoalChange | null = null;
+  if (root.goal_change && typeof root.goal_change === "object") {
+    const g = root.goal_change as Record<string, unknown>;
+    if (isGoal(g.goal)) {
+      const gw = num(g.goal_weight_kg);
+      goal_change = { goal: g.goal, goal_weight_kg: gw != null && gw >= 30 && gw <= 300 ? gw : null };
+    }
+  }
+
+  let health_update: ParsedHealthUpdate | null = null;
+  if (root.health_update && typeof root.health_update === "object") {
+    const h = root.health_update as Record<string, unknown>;
+    const condition = str(h.condition);
+    const action = str(h.action);
+    if (condition)
+      health_update = {
+        condition: condition.slice(0, 200),
+        notes: str(h.notes)?.slice(0, 1000) ?? null,
+        action: action && HEALTH_ACTIONS.includes(action as HealthAction) ? (action as HealthAction) : "add",
+      };
+  }
+
+  const logDate = str(root.log_date);
   return {
     foods,
     workout,
     sleep,
     weight_kg: num(root.weight_kg),
+    // An unreadable day ("last monday") must NOT fall back to today: keep a
+    // marker so the chat asks "Which day was that?" and writes nothing.
+    log_date: logDate
+      ? /^(today|yesterday)$/i.test(logDate) || /^\d{4}-\d{2}-\d{2}$/.test(logDate)
+        ? logDate.toLowerCase()
+        : "invalid"
+      : null,
+    is_question: root.is_question === true,
+    goal_change,
+    health_update,
     needs_clarification: str(root.needs_clarification),
   };
 }

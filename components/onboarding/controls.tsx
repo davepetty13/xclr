@@ -28,9 +28,9 @@ export function TextField({
   ariaLabel?: string;
 }) {
   return (
-    <div className="flex items-center rounded-chip border border-line bg-paper px-4 py-3 focus-within:border-green">
+    <div className="field flex items-center px-4 py-2.5 focus-within:border-green">
       <input
-        className="tnum w-full bg-transparent text-lg font-medium text-ink outline-none placeholder:text-faint"
+        className="tnum w-full bg-transparent text-lg font-medium text-ink outline-none placeholder:text-muted"
         value={value}
         type={type}
         inputMode={inputMode}
@@ -71,7 +71,7 @@ export function AutoGrowTextarea({
   }, [value]);
 
   return (
-    <div className="rounded-chip border border-line bg-paper px-4 py-3 focus-within:border-green">
+    <div className="field px-4 py-2.5 focus-within:border-green">
       <textarea
         ref={ref}
         rows={1}
@@ -79,7 +79,7 @@ export function AutoGrowTextarea({
         placeholder={placeholder}
         aria-label={ariaLabel}
         onChange={(e) => onChange(e.target.value)}
-        className="block w-full resize-none overflow-hidden bg-transparent text-lg font-medium leading-relaxed text-ink outline-none placeholder:text-faint"
+        className="block w-full resize-none overflow-hidden bg-transparent text-lg font-medium leading-relaxed text-ink outline-none placeholder:text-muted"
       />
     </div>
   );
@@ -101,10 +101,10 @@ export function OptionCard({
       type="button"
       onClick={onClick}
       aria-pressed={selected}
-      className={`w-full rounded-tile border px-4 py-3.5 text-left transition-colors ${
+      className={`w-full rounded-tile px-4 py-3.5 text-left shadow-card transition-colors ${
         selected
-          ? "border-green bg-green-soft"
-          : "border-line bg-card hover:border-faint"
+          ? "bg-green-soft shadow-[var(--shadow-card),inset_0_0_0_1.5px_var(--green)]"
+          : "bg-card"
       }`}
     >
       <span className="block text-base font-semibold text-ink">{label}</span>
@@ -127,10 +127,10 @@ export function Chip({
       type="button"
       onClick={onClick}
       aria-pressed={selected}
-      className={`rounded-chip border px-4 py-2.5 text-sm font-semibold transition-colors ${
+      className={`min-h-[44px] rounded-control border px-4 text-sm font-semibold transition-colors ${
         selected
-          ? "border-green bg-green text-card"
-          : "border-line bg-card text-ink hover:border-faint"
+          ? "border-ink bg-ink text-card"
+          : "border-hairline bg-card text-ink hover:border-muted"
       }`}
     >
       {label}
@@ -148,15 +148,15 @@ export function Segmented<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="flex gap-1 rounded-chip border border-line bg-paper p-1">
+    <div className="flex gap-1 rounded-control bg-segment p-1">
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
           onClick={() => onChange(o.value)}
           aria-pressed={value === o.value}
-          className={`flex-1 rounded-tile px-3 py-2 text-sm font-semibold transition-colors ${
-            value === o.value ? "bg-card text-ink shadow-card" : "text-muted"
+          className={`min-h-[44px] flex-1 rounded-[8px] px-3 text-sm font-semibold transition-colors ${
+            value === o.value ? "bg-card font-bold text-ink shadow-card" : "text-muted"
           }`}
         >
           {o.label}
@@ -182,18 +182,18 @@ export function Stepper({
   label?: string;
 }) {
   return (
-    <div className="flex items-center justify-between rounded-chip border border-line bg-paper px-3 py-2">
+    <div className="glass flex items-center justify-between rounded-tile px-3 py-2">
       <button
         type="button"
         onClick={() => onChange(Math.max(min, value - 1))}
         aria-label={label ? `Decrease ${label}` : "Decrease"}
         disabled={value <= min}
-        className="h-11 w-11 rounded-chip border border-line bg-card text-xl font-semibold text-ink transition-opacity hover:opacity-80 disabled:opacity-40"
+        className="h-11 w-11 rounded-control border border-hairline bg-card text-xl font-semibold text-ink transition-opacity hover:opacity-80 disabled:opacity-40"
       >
         −
       </button>
       <span className="text-center">
-        <span className="tnum font-serif text-2xl font-medium text-ink">{value}</span>
+        <span className="tnum font-display text-2xl font-bold text-ink">{value}</span>
         {suffix ? (
           <span className="ml-1 text-sm font-medium text-muted">{suffix}</span>
         ) : null}
@@ -203,7 +203,7 @@ export function Stepper({
         onClick={() => onChange(Math.min(max, value + 1))}
         aria-label={label ? `Increase ${label}` : "Increase"}
         disabled={value >= max}
-        className="h-11 w-11 rounded-chip border border-line bg-card text-xl font-semibold text-ink transition-opacity hover:opacity-80 disabled:opacity-40"
+        className="h-11 w-11 rounded-control border border-hairline bg-card text-xl font-semibold text-ink transition-opacity hover:opacity-80 disabled:opacity-40"
       >
         +
       </button>

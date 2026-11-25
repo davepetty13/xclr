@@ -27,7 +27,9 @@ export default async function AppLayout({
   if (!(await hasActiveProgram(supabase, user.id))) redirect("/program");
 
   return (
-    <div className="mx-auto min-h-screen w-full max-w-md bg-paper pb-20">
+    // No page fill: body paints the paper backdrop. Bottom padding = nav height
+    // (h-20 + safe area) so the last content and the chat composer clear it.
+    <div className="mx-auto min-h-screen w-full max-w-md pb-[calc(5rem+env(safe-area-inset-bottom))]">
       {children}
       <BottomNav />
     </div>

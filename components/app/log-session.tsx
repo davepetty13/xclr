@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { logSession, type SetInput } from "@/app/(app)/workout/actions";
-import { formatLoad, type LoadType } from "@/lib/program-schema";
+import { formatLoad, loadUnitLabel, type LoadType } from "@/lib/program-schema";
 
 export type LogExercise = {
   programExerciseId: string;
@@ -106,9 +106,15 @@ export function LogSession({
         });
       }
     }
-    const r = await logSession(dayId, type, sets, note);
+    let r: Awaited<ReturnType<typeof logSession>>;
+    try {
+      r = await logSession(dayId, type, sets, note);
+    } catch {
+      // Dropped connection / server error: nothing is confirmed, keep the draft.
+      r = { ok: false, error: "Couldn't reach the server. Your sets are still here — try again." };
+    }
     setBusy(false);
-    if (r.ok) {
+    if (r.ok === true) {
       try {
         localStorage.removeItem(draftKey);
       } catch {
@@ -121,12 +127,14 @@ export function LogSession({
     }
   }
 
+  // Which exercise has the logging UI open, and which set row is being edited.
+  const [active, setActive] = useState(0);
+  const [editing, setEditing] = useState<number | null>(null);
+
   if (done) {
     return (
-      <div className="rounded-tile border border-line bg-green-soft p-5 text-center">
-        <p className="font-serif text-xl font-medium text-green">
-          Session logged 💪
-        </p>
+      <div className="rounded-card bg-green-soft p-5 text-center shadow-card">
+        <p className="font-display text-xl font-bold text-green">Session logged</p>
         <p className="mt-1 text-sm font-medium text-muted">
           Nice work. It&apos;s in your history and feeds next week&apos;s review.
         </p>
@@ -134,88 +142,203 @@ export function LogSession({
     );
   }
 
-  const cellCls =
-    "tnum w-full rounded-chip border border-line bg-paper px-2 py-2 text-center text-sm font-medium text-ink outline-none placeholder:text-faint focus:border-green";
+  const isLogged = (peId: string, i: number) => {
+    const c = cells[key(peId, i)];
+    // Mirrors finish(): a set is sent once it has reps or a load.
+    return !!c && (c.reps.trim() !== "" || c.load.trim() !== "");
+  };
+  const loggedCount = (ex: LogExercise) => {
+    const count = Math.max(1, ex.prescribed_sets ?? 1);
+    let n = 0;
+    for (let i = 0; i < count; i++) if (isLogged(ex.programExerciseId, i)) n++;
+    return n;
+  };
+
+  // Prescription line with the load (and its type) bolded.
+  const prescription = (ex: LogExercise) => {
+    const scheme =
+      ex.prescribed_sets && ex.rep_scheme
+        ? `${ex.prescribed_sets} × ${ex.rep_scheme}`
+        : ex.rep_scheme;
+    const load = formatLoad(ex.suggested_load_value, ex.suggested_load_type);
+    const rpe =
+      ex.target_rpe_low != null && ex.target_rpe_high != null
+        ? `RPE ${ex.target_rpe_low}–${ex.target_rpe_high}`
+        : null;
+    const parts: React.ReactNode[] = [];
+    if (scheme) parts.push(scheme);
+    if (load)
+      parts.push(
+        <strong key="load" className="font-bold text-ink">
+          {load}
+        </strong>
+      );
+    if (rpe) parts.push(rpe);
+    return parts.map((p, i) => (
+      <span key={i}>
+        {i > 0 ? " · " : ""}
+        {p}
+      </span>
+    ));
+  };
+
+  const fieldCls =
+    "field tnum w-full px-2 text-center text-sm font-medium outline-none placeholder:text-muted focus:border-green";
+
+  const activeIdx = Math.min(active, exercises.length - 1);
+  const ex = exercises[activeIdx];
+  const count = Math.max(1, ex.prescribed_sets ?? 1);
+  const nextEmpty = Array.from({ length: count }).findIndex(
+    (_, i) => !isLogged(ex.programExerciseId, i)
+  );
+
+  const editRow = (i: number) => {
+    const c = get(ex.programExerciseId, i, ex.suggested_load_value);
+    const unit = loadUnitLabel(ex.suggested_load_type);
+    return (
+      <div className="flex flex-col gap-2 rounded-tile bg-field p-3">
+        <p className="text-xs font-bold text-ink">Set {i + 1}</p>
+        <div className="grid grid-cols-3 gap-2">
+          <label className="flex flex-col gap-1 text-[11px] font-semibold text-muted">
+            {unit}
+            <input
+              className={fieldCls}
+              inputMode="decimal"
+              value={c.load}
+              onChange={(e) =>
+                set(ex.programExerciseId, i, { load: e.target.value }, ex.suggested_load_value)
+              }
+              aria-label={`${ex.name} set ${i + 1} load`}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] font-semibold text-muted">
+            reps
+            <input
+              className={fieldCls}
+              inputMode="numeric"
+              value={c.reps}
+              onChange={(e) =>
+                set(ex.programExerciseId, i, { reps: e.target.value }, ex.suggested_load_value)
+              }
+              aria-label={`${ex.name} set ${i + 1} reps`}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] font-semibold text-muted">
+            RPE
+            <input
+              className={fieldCls}
+              inputMode="decimal"
+              value={c.rpe}
+              onChange={(e) =>
+                set(ex.programExerciseId, i, { rpe: e.target.value }, ex.suggested_load_value)
+              }
+              aria-label={`${ex.name} set ${i + 1} RPE`}
+            />
+          </label>
+        </div>
+        <button
+          type="button"
+          onClick={() => setEditing(null)}
+          className="btn-primary btn-primary-green w-full text-[13px]"
+        >
+          Done with set {i + 1}
+        </button>
+      </div>
+    );
+  };
+
+  const others = exercises
+    .map((e, i) => ({ e, i }))
+    .filter(({ i }) => i !== activeIdx);
 
   return (
-    <div className="space-y-4">
-      {exercises.map((ex) => {
-        const count = Math.max(1, ex.prescribed_sets ?? 1);
-        const prescribed = formatLoad(ex.suggested_load_value, ex.suggested_load_type);
-        const rpe =
-          ex.target_rpe_low != null && ex.target_rpe_high != null
-            ? `RPE ${ex.target_rpe_low}–${ex.target_rpe_high}`
-            : null;
-        return (
-          <div key={ex.programExerciseId} className="rounded-tile border border-line bg-card p-4">
-            <p className="text-sm font-semibold text-ink">{ex.name}</p>
-            <p className="tnum mt-0.5 text-sm text-muted">
-              {[
-                ex.prescribed_sets && ex.rep_scheme
-                  ? `${ex.prescribed_sets} × ${ex.rep_scheme}`
-                  : ex.rep_scheme,
-                prescribed,
-                rpe,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
-            {ex.coach_note ? (
-              <p className="mt-1 text-xs font-medium text-green">{ex.coach_note}</p>
-            ) : null}
+    <div className="space-y-3">
+      {/* Active exercise: the logging UI */}
+      <section
+        aria-label={ex.name}
+        className="glass flex flex-col gap-2 px-3.5 py-3 shadow-[var(--shadow-card),inset_3px_0_0_var(--green)]"
+      >
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+          <h3 className="text-[15px] font-bold text-ink">{ex.name}</h3>
+          <p className="tnum text-[13px] text-muted">{prescription(ex)}</p>
+        </div>
+        {ex.coach_note ? (
+          <p className="text-xs font-medium text-green">Coach: {ex.coach_note}</p>
+        ) : null}
 
-            <div className="mt-3 space-y-2">
-              <div className="grid grid-cols-[1.5rem_1fr_1fr_1fr] items-center gap-2 text-xs font-semibold text-faint">
-                <span>Set</span>
-                <span className="text-center">load</span>
-                <span className="text-center">reps</span>
-                <span className="text-center">RPE</span>
-              </div>
-              {Array.from({ length: count }).map((_, i) => {
-                const c = get(ex.programExerciseId, i, ex.suggested_load_value);
-                return (
-                  <div
-                    key={i}
-                    className="grid grid-cols-[1.5rem_1fr_1fr_1fr] items-center gap-2"
+        <div className="flex flex-wrap gap-1.5">
+          {Array.from({ length: count }).map((_, i) => {
+            if (!isLogged(ex.programExerciseId, i) || editing === i) return null;
+            const c = cells[key(ex.programExerciseId, i)];
+            const unit = loadUnitLabel(ex.suggested_load_type);
+            const load = c.load.trim() !== "" ? `${c.load.trim()} ${unit}` : "";
+            return (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setEditing(i)}
+                aria-label={`Edit set ${i + 1}: ${[load, c.reps && `${c.reps} reps`, c.rpe && `RPE ${c.rpe}`].filter(Boolean).join(", ")}`}
+                className="tnum min-h-[44px] rounded-[8px] bg-green-soft px-2.5 font-display text-xs font-bold text-green"
+              >
+                {[load, c.reps.trim()].filter((v) => v !== "").join(" × ")}
+                {c.rpe ? ` · ${c.rpe}` : ""}
+              </button>
+            );
+          })}
+          {editing == null && nextEmpty !== -1 ? (
+            <button
+              type="button"
+              onClick={() => setEditing(nextEmpty)}
+              className="min-h-[44px] rounded-[8px] border border-dashed border-muted bg-transparent px-3 text-xs font-bold text-ink"
+            >
+              + Set {nextEmpty + 1}
+            </button>
+          ) : null}
+        </div>
+        {editing != null ? editRow(editing) : null}
+      </section>
+
+      {/* Remaining exercises */}
+      {others.length ? (
+        <section aria-label="Other exercises" className="glass px-3.5 py-0.5">
+          <ul>
+            {others.map(({ e, i }, n) => {
+              const logged = loggedCount(e);
+              const total = Math.max(1, e.prescribed_sets ?? 1);
+              return (
+                <li
+                  key={e.programExerciseId}
+                  className={n < others.length - 1 ? "border-b border-hairline" : ""}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActive(i);
+                      setEditing(null);
+                    }}
+                    className="flex min-h-[46px] w-full items-center justify-between gap-3 py-2 text-left"
                   >
-                    <span className="tnum text-sm font-semibold text-muted">{i + 1}</span>
-                    <input
-                      className={cellCls}
-                      inputMode="decimal"
-                      value={c.load}
-                      onChange={(e) =>
-                        set(ex.programExerciseId, i, { load: e.target.value }, ex.suggested_load_value)
-                      }
-                      aria-label={`${ex.name} set ${i + 1} load`}
-                    />
-                    <input
-                      className={cellCls}
-                      inputMode="numeric"
-                      value={c.reps}
-                      onChange={(e) =>
-                        set(ex.programExerciseId, i, { reps: e.target.value }, ex.suggested_load_value)
-                      }
-                      aria-label={`${ex.name} set ${i + 1} reps`}
-                    />
-                    <input
-                      className={cellCls}
-                      inputMode="decimal"
-                      value={c.rpe}
-                      onChange={(e) =>
-                        set(ex.programExerciseId, i, { rpe: e.target.value }, ex.suggested_load_value)
-                      }
-                      aria-label={`${ex.name} set ${i + 1} RPE`}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
+                    <span className="flex items-center gap-2 text-sm font-semibold text-ink">
+                      {e.name}
+                      {logged > 0 ? (
+                        <span className="mark mark-green tnum">
+                          {logged}/{total}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="tnum shrink-0 text-right text-[13px] text-muted">
+                      {prescription(e)}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
 
-      <div>
-        <label className="mb-1 block text-sm font-semibold text-ink" htmlFor="session-note">
+      <div className="glass flex flex-col gap-1.5 px-3.5 py-3">
+        <label className="text-sm font-bold text-ink" htmlFor="session-note">
           Session note
         </label>
         <textarea
@@ -224,14 +347,14 @@ export function LogSession({
           onChange={(e) => setNote(e.target.value)}
           rows={2}
           placeholder="e.g. felt strong, or wrist a bit sore today"
-          className="w-full resize-none rounded-chip border border-line bg-paper px-4 py-3 text-sm font-medium text-ink outline-none placeholder:text-faint focus:border-green"
+          className="field w-full resize-none py-3 text-sm font-medium outline-none placeholder:text-muted focus:border-green"
         />
       </div>
 
       {error ? (
         <p
           role="alert"
-          className="rounded-chip border border-ember bg-ember-soft px-4 py-3 text-sm font-medium text-ink"
+          className="pop !rounded-tile px-4 py-3 text-sm font-medium text-ink shadow-[inset_3px_0_0_var(--ember),var(--shadow-pop)]"
         >
           {error}
         </p>
@@ -241,7 +364,7 @@ export function LogSession({
         type="button"
         onClick={() => void finish()}
         disabled={busy}
-        className="w-full rounded-chip bg-green px-5 py-3 text-sm font-semibold text-card transition-opacity hover:opacity-90 disabled:opacity-50"
+        className="btn-primary btn-primary-green w-full text-sm"
       >
         {busy ? "Saving…" : "Finish session"}
       </button>

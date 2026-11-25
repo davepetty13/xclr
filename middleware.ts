@@ -32,7 +32,10 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const isPublic = path.startsWith("/login") || path.startsWith("/auth");
+  // /api/cron is called by Vercel Cron without a session; the route checks
+  // its own CRON_SECRET bearer token.
+  const isPublic =
+    path === "/login" || path.startsWith("/auth/") || path === "/api/cron/photo-cleanup";
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone();

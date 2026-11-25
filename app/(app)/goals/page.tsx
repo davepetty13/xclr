@@ -1,7 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { kgToLbs } from "@/lib/units";
 import { PRIMARY_GOALS, SPORTS } from "@/lib/onboarding-options";
+import Link from "next/link";
 import { UnitToggle } from "@/components/app/goals-panel";
+import { AiUsageCard } from "@/components/app/ai-usage-card";
 
 export default async function GoalsPage() {
   const supabase = createClient();
@@ -37,78 +39,95 @@ export default async function GoalsPage() {
         ? `${kgToLbs(goalWeight).toFixed(1)} lbs`
         : `${goalWeight.toFixed(1)} kg`;
 
+  const { data: latest } = await supabase
+    .from("weights")
+    .select("kg")
+    .eq("user_id", user.id)
+    .order("measured_on", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const nowKg = latest?.kg != null ? Number(latest.kg) : null;
+  const show = (kg: number | null) =>
+    kg == null ? "—" : (unit === "lbs" ? kgToLbs(kg) : kg).toFixed(2);
+  const toGo = nowKg != null && goalWeight != null ? Math.abs(nowKg - goalWeight) : null;
+
   const targets: { label: string; value: string }[] = [
-    { label: "Daily calories", value: `${Number(profile?.daily_calorie_target) || 2200} kcal` },
-    { label: "Daily protein", value: `${Number(profile?.daily_protein_target) || 150} g` },
+    { label: "Primary goal", value: goalLabel },
+    { label: "Daily calories", value: `${(Number(profile?.daily_calorie_target) || 2200).toLocaleString("en-US")} kcal` },
+    { label: "Protein", value: `${Number(profile?.daily_protein_target) || 150} g` },
     { label: "Goal weight", value: goalWeightDisplay },
-    { label: "Daily steps", value: `${Number(profile?.daily_step_target) || 8000}` },
+    { label: "Daily steps", value: (Number(profile?.daily_step_target) || 8000).toLocaleString("en-US") },
   ];
 
   return (
-    <main className="px-5 py-6">
-      <h1 className="font-serif text-2xl font-medium tracking-tight text-ink">
-        Goals
-      </h1>
+    <main className="flex flex-col gap-3 px-4 pb-6 pt-5">
+      <header className="flex items-start justify-between gap-3 px-1">
+        <div className="min-w-0">
+          <h1 className="font-display text-[22px] font-bold tracking-[-0.02em] text-ink">Goals</h1>
+          <p className="mt-0.5 text-xs text-muted">
+            {[goalLabel, sportLabels.join(", ")].filter(Boolean).join(" · ")}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Link href="/profile" className="btn-secondary px-3 text-[13px]">
+            Profile
+          </Link>
+          <Link href="/goals/change" className="btn-primary px-3 text-[13px]">
+            Change goal
+          </Link>
+        </div>
+      </header>
 
-      <section className="mt-5 rounded-card border border-line bg-card p-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-faint">
-          Primary goal
-        </p>
-        <p className="mt-1 font-serif text-xl font-medium text-ink">{goalLabel}</p>
-        <p className="mt-1 text-sm font-medium text-muted">
-          This drives your dashboard. Change it and Xclr proposes a fresh program.
-        </p>
-      </section>
-
-      <section className="mt-4">
-        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-faint">
-          Sports
-        </p>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {sportLabels.length ? (
-            sportLabels.map((s) => (
-              <span
-                key={s}
-                className="rounded-chip border border-line bg-card px-3 py-1.5 text-sm font-semibold text-ink"
-              >
-                {s}
-              </span>
-            ))
-          ) : (
-            <span className="text-sm font-medium text-muted">None yet</span>
-          )}
+      {/* The one dark band: where your weight is vs the goal */}
+      <section aria-label="Weight goal" className="band grid grid-cols-3">
+        <div className="band-edge px-3.5 py-3">
+          <p className="text-[11px] text-band-label">Now</p>
+          <p className="tnum font-display text-[19px] font-bold">
+            {show(nowKg)}
+            {nowKg != null ? <span className="text-xs text-band-secondary"> {unit}</span> : null}
+          </p>
+        </div>
+        <div className="border-l border-band-hairline px-3.5 py-3">
+          <p className="text-[11px] text-band-label">Goal</p>
+          <p className="tnum font-display text-[19px] font-bold">
+            {show(goalWeight)}
+            {goalWeight != null ? <span className="text-xs text-band-secondary"> {unit}</span> : null}
+          </p>
+        </div>
+        <div className="border-l border-band-hairline px-3.5 py-3">
+          <p className="text-[11px] text-band-label">To go</p>
+          <p className="tnum font-display text-[19px] font-bold text-green-on-dark">
+            {show(toGo)}
+            {toGo != null ? <span className="text-xs text-band-secondary"> {unit}</span> : null}
+          </p>
         </div>
       </section>
 
-      <section className="mt-6 rounded-card border border-line bg-card p-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-faint">
-          Targets
-        </p>
-        <dl className="mt-2 divide-y divide-line">
+      <section aria-label="Targets" className="glass px-3.5 py-0.5">
+        <dl>
           {targets.map((t) => (
-            <div key={t.label} className="flex items-baseline justify-between py-2.5">
-              <dt className="text-sm font-medium text-ink">{t.label}</dt>
-              <dd className="tnum text-sm font-semibold text-muted">{t.value}</dd>
+            <div
+              key={t.label}
+              className="flex min-h-[46px] items-center justify-between gap-3 border-b border-hairline"
+            >
+              <dt className="text-sm text-ink">{t.label}</dt>
+              <dd className="tnum font-display text-sm font-bold text-ink">{t.value}</dd>
             </div>
           ))}
         </dl>
+        <div className="flex min-h-[52px] items-center justify-between gap-3">
+          <span className="text-sm text-ink">
+            Units
+            <span className="block text-[11px] text-muted">Display only. Xclr stores kg.</span>
+          </span>
+          <UnitToggle unit={unit} />
+        </div>
       </section>
 
-      <section className="mt-4 rounded-card border border-line bg-card p-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.1em] text-faint">
-          Units
-        </p>
-        <p className="mb-2 mt-1 text-sm font-medium text-muted">
-          Display only — Xclr always stores kilograms.
-        </p>
-        <UnitToggle unit={unit} />
-      </section>
+      <AiUsageCard supabase={supabase} userId={user.id} />
 
-      <form action="/auth/signout" method="post" className="mt-6">
-        <button
-          type="submit"
-          className="w-full rounded-chip border border-line bg-card px-4 py-3 text-sm font-semibold text-ink transition-opacity hover:opacity-80"
-        >
+      <form action="/auth/signout" method="post" className="mt-1">
+        <button type="submit" className="btn-secondary w-full text-sm">
           Sign out
         </button>
       </form>

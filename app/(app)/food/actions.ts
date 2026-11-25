@@ -114,6 +114,7 @@ export async function quickAddFromLibrary(
   await supabase
     .from("food_library")
     .update({ times_logged: ((lib.times_logged as number) ?? 1) + 1 })
-    .eq("id", libraryId);
+    .eq("id", libraryId)
+    .eq("user_id", user.id);
   return { ok: true };
 }

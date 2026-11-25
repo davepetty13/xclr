@@ -7,16 +7,16 @@ import {
   approveProgram,
   saveTrainingNotes,
 } from "@/app/program/actions";
-import { formatLoad, type GeneratedProgram } from "@/lib/program-schema";
+import { formatLoad, loadUnitLabel, type GeneratedProgram } from "@/lib/program-schema";
 import { AutoGrowTextarea, TextField } from "@/components/onboarding/controls";
 
 type Phase = "building" | "preview" | "error";
 
 const DAY_BADGE: Record<string, string> = {
-  strength: "bg-green-soft text-green",
-  cardio: "bg-ember-soft text-ember",
-  recovery: "bg-paper text-muted",
-  rest: "bg-paper text-muted",
+  strength: "mark-green",
+  cardio: "mark-neutral",
+  recovery: "mark-neutral",
+  rest: "mark-neutral",
 };
 
 export function ProgramBuilder({
@@ -134,10 +134,13 @@ export function ProgramBuilder({
   if (phase === "building") {
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center px-6 text-center">
-        <span className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-green-soft">
+        <span
+          aria-hidden="true"
+          className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-green-soft"
+        >
           <span className="h-4 w-4 animate-ping rounded-full bg-green" />
         </span>
-        <h1 className="font-serif text-3xl font-medium tracking-tight text-ink">
+        <h1 className="font-display text-[26px] font-bold leading-tight tracking-[-0.02em] text-ink">
           Xclr is building your program…
         </h1>
         <p className="mt-3 text-sm font-medium text-muted">
@@ -152,7 +155,7 @@ export function ProgramBuilder({
   if (phase === "error" || !program) {
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center px-6 text-center">
-        <h1 className="font-serif text-2xl font-medium tracking-tight text-ink">
+        <h1 className="font-display text-[22px] font-bold tracking-[-0.02em] text-ink">
           That didn&apos;t work
         </h1>
         <p className="mt-3 text-sm font-medium text-muted">
@@ -161,7 +164,7 @@ export function ProgramBuilder({
         <button
           type="button"
           onClick={() => void build()}
-          className="mt-6 rounded-chip bg-green px-6 py-3 text-sm font-semibold text-card transition-opacity hover:opacity-90"
+          className="btn-primary mt-6 px-6 text-sm"
         >
           Try again
         </button>
@@ -171,8 +174,8 @@ export function ProgramBuilder({
 
   // ---- preview ----
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col px-5 py-6">
-      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-faint">
+    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 py-6">
+      <p className="px-1 font-display text-[22px] font-bold tracking-[-0.02em] text-ink">
         Your program — review &amp; approve
       </p>
       <div className="mt-2">
@@ -181,34 +184,35 @@ export function ProgramBuilder({
           onChange={setProgramName}
           ariaLabel="Program name"
         />
-        <p className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-faint">
-          {program.program.days_per_week} days / week
+        <p className="mt-1 px-1 text-xs font-semibold text-muted">
+          <span className="tnum font-display text-sm font-bold text-ink">
+            {program.program.days_per_week}
+          </span>{" "}
+          days / week
         </p>
       </div>
 
       {program.summary_for_user ? (
-        <p className="mt-4 text-sm font-medium text-muted">
+        <p className="mt-4 px-1 text-sm font-medium text-muted">
           {program.summary_for_user}
         </p>
       ) : null}
 
-      <div className="mt-6 space-y-4">
+      <div className="mt-5 space-y-3">
         {program.days.map((day, di) => (
-          <div key={di} className="rounded-tile border border-line bg-card p-4">
-            <div className="flex items-center justify-between">
-              <h2 className="font-serif text-lg font-medium text-ink">
+          <section key={di} className="glass px-4 py-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="font-display text-lg font-bold tracking-[-0.01em] text-ink">
                 Day {day.day_index} · {day.label}
               </h2>
               <span
-                className={`rounded-chip px-2.5 py-1 text-xs font-semibold capitalize ${
-                  DAY_BADGE[day.type] ?? "bg-paper text-muted"
-                }`}
+                className={`mark capitalize ${DAY_BADGE[day.type] ?? "mark-neutral"}`}
               >
                 {day.type}
               </span>
             </div>
 
-            <div className="mt-3 space-y-3">
+            <div className="mt-1">
               {day.exercises.map((ex, ei) => {
                 const load = formatLoad(ex.suggested_load_value, ex.suggested_load_type);
                 const rpe =
@@ -218,19 +222,30 @@ export function ProgramBuilder({
                 return (
                   <div
                     key={ei}
-                    className="rounded-chip border border-line bg-paper p-3"
+                    className="border-b border-hairline py-3 last:border-b-0"
                   >
                     <p className="text-sm font-semibold text-ink">{ex.exercise}</p>
-                    <p className="tnum mt-0.5 text-sm text-muted">
-                      {[
-                        ex.prescribed_sets != null && ex.rep_scheme
-                          ? `${ex.prescribed_sets} × ${ex.rep_scheme}`
-                          : ex.rep_scheme,
-                        load,
-                        rpe,
-                      ]
+                    <p className="tnum mt-0.5 text-[13px] text-muted">
+                      {(
+                        [
+                          ex.prescribed_sets != null && ex.rep_scheme
+                            ? `${ex.prescribed_sets} × ${ex.rep_scheme}`
+                            : ex.rep_scheme,
+                          load ? (
+                            <strong key="load" className="font-bold text-ink">
+                              {load}
+                            </strong>
+                          ) : null,
+                          rpe,
+                        ] as React.ReactNode[]
+                      )
                         .filter(Boolean)
-                        .join(" · ")}
+                        .map((part, pi) => (
+                          <span key={pi}>
+                            {pi > 0 ? " · " : ""}
+                            {part}
+                          </span>
+                        ))}
                     </p>
                     {ex.suggested_load_type &&
                     ex.suggested_load_type !== "bodyweight" &&
@@ -250,7 +265,7 @@ export function ProgramBuilder({
                             })
                           }
                           inputMode="decimal"
-                          suffix="kg"
+                          suffix={loadUnitLabel(ex.suggested_load_type)}
                           ariaLabel={`${ex.exercise} load`}
                         />
                       </div>
@@ -269,15 +284,15 @@ export function ProgramBuilder({
                 );
               })}
               {day.exercises.length === 0 ? (
-                <p className="text-sm font-medium text-muted">Rest day.</p>
+                <p className="pt-2 text-sm font-medium text-muted">Rest day.</p>
               ) : null}
             </div>
-          </div>
+          </section>
         ))}
       </div>
 
       {program.flags.length ? (
-        <ul className="mt-4 space-y-1">
+        <ul className="mt-4 space-y-1 px-1">
           {program.flags.map((f, i) => (
             <li key={i} className="text-xs font-medium text-muted">
               · {f}
@@ -289,16 +304,16 @@ export function ProgramBuilder({
       {error ? (
         <p
           role="alert"
-          className="mt-4 rounded-chip border border-ember bg-ember-soft px-4 py-3 text-sm font-medium text-ink"
+          className="mt-4 pop !rounded-tile px-4 py-3 text-sm font-medium text-ink shadow-[inset_3px_0_0_var(--ember),var(--shadow-pop)]"
         >
           {error}
         </p>
       ) : null}
 
-      <div className="mt-6">
+      <div className="glass mt-5 px-4 py-3.5">
         <label
           htmlFor="training-notes"
-          className="mb-1 block text-sm font-semibold text-ink"
+          className="mb-1.5 block text-sm font-bold text-ink"
         >
           Want a different style? Tell Xclr, then regenerate
         </label>
@@ -312,7 +327,7 @@ export function ProgramBuilder({
           type="button"
           onClick={() => void saveAndRegenerate()}
           disabled={approving}
-          className="mt-2 w-full rounded-chip border border-line bg-card px-4 py-2.5 text-sm font-semibold text-ink transition-opacity hover:opacity-80 disabled:opacity-50"
+          className="btn-secondary mt-2 w-full text-sm"
         >
           Save note &amp; regenerate
         </button>
@@ -323,7 +338,7 @@ export function ProgramBuilder({
           type="button"
           onClick={() => void build()}
           disabled={approving}
-          className="rounded-chip border border-line bg-card px-5 py-3 text-sm font-semibold text-ink transition-opacity hover:opacity-80 disabled:opacity-50"
+          className="btn-secondary px-5 text-sm"
         >
           Regenerate
         </button>
@@ -331,12 +346,12 @@ export function ProgramBuilder({
           type="button"
           onClick={() => void approve()}
           disabled={approving}
-          className="flex-1 rounded-chip bg-green px-5 py-3 text-sm font-semibold text-card transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="btn-primary btn-primary-green flex-1 px-5 text-sm"
         >
           {approving ? "Activating…" : "Approve & activate"}
         </button>
       </div>
-      <p className="mt-3 text-center text-xs font-medium text-faint">
+      <p className="mt-3 text-center text-xs font-medium text-muted">
         {displayName ? `${displayName}, you` : "You"} can tweak loads and notes,
         or change your plan anytime from Goals.
       </p>

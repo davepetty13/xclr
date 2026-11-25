@@ -19,12 +19,12 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-paper px-6">
-      <div className="w-full max-w-sm rounded-card border border-line bg-card p-8 shadow-card">
-        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-faint">
+    <main className="flex min-h-screen items-center justify-center px-4">
+      <div className="glass w-full max-w-sm p-8">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">
           Welcome to
         </p>
-        <h1 className="mt-1 font-serif text-5xl font-medium tracking-tight">
+        <h1 className="mt-1 font-display text-5xl font-bold tracking-[-0.02em] text-ink">
           Xclr
         </h1>
         <p className="mt-3 text-sm font-medium text-muted">
@@ -34,7 +34,7 @@ export default function LoginPage() {
         <button
           onClick={signInWithGoogle}
           disabled={busy}
-          className="mt-8 w-full rounded-chip border border-line bg-paper px-4 py-3 text-sm font-semibold text-ink transition-opacity hover:opacity-80 disabled:opacity-50"
+          className="btn-primary mt-8 w-full text-sm"
         >
           {busy ? "Redirecting…" : "Continue with Google"}
         </button>

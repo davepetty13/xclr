@@ -2,36 +2,201 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Xclr design tokens (Master Spec §13). Hex values live ONLY here —
-   components reference tokens via Tailwind theme or var(--…). */
+/* Xclr design tokens (Master Spec §13, v3 "Glass · Sora" direction).
+   Hex values live ONLY here — components reference tokens via the Tailwind
+   theme, var(--…), or the component classes below. */
 :root {
   --paper: #f6f3ec;
+  --backdrop-base: #ece7dc;
   --card: #ffffff;
   --ink: #16211b;
-  --muted: #6e7a72;
+  --muted: #5a655d; /* darkened in v3 for 4.5:1 contrast on paper */
   --faint: #9aa49c;
   --line: #ece7dc;
+  --hairline: rgba(22, 33, 27, 0.08);
+  --control-border: rgba(22, 33, 27, 0.12);
+  --field: #f7f5f0;
+  --segment: #f1eee7;
   --green: #1e7a4d; /* nutrition / intake / progress */
   --green-soft: #e5f1ea;
+  --green-on-dark: #6fcf97;
   --ember: #e0603a; /* activity / burn / attention */
   --ember-soft: #f9e9e1;
+  --ember-text: #c24e2a;
+  --ember-on-dark: #f28a68;
   --amber: #e0a11b; /* carbs */
-  --violet: #7c6bd6; /* fat / sleep */
+  --amber-soft: #fbf0d6;
+  --amber-text: #8a5a00; /* "estimate" / "hold" marks */
+  --violet: #7c6bd6; /* protein bar / fat / sleep / health */
 
-  /* shape & elevation (from approved mock) */
-  --radius-card: 26px;
+  /* dark band (ONE per screen: the first row of numbers) */
+  --band-text: #ffffff;
+  --band-secondary: #c9d2cc;
+  --band-label: #a9b5ad;
+  --band-hairline: rgba(255, 255, 255, 0.09);
+  --band-track: rgba(255, 255, 255, 0.12);
+
+  /* shape */
+  --radius-card: 24px;
+  --radius-band: 22px;
   --radius-tile: 20px;
-  --radius-chip: 16px;
-  --shadow-card: 0 12px 30px -20px rgba(22, 33, 27, 0.25);
+  --radius-chip: 10px;
+  --radius-control: 10px;
+  --radius-mark: 7px;
+  --shadow-card: inset 0 1px 0 #ffffff, inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+    0 1px 2px rgba(22, 33, 27, 0.05), 0 24px 50px -24px rgba(22, 33, 27, 0.26);
+  --shadow-pop: inset 0 1px 0 #ffffff, 0 2px 6px rgba(31, 31, 35, 0.08),
+    0 40px 80px -20px rgba(20, 20, 24, 0.45);
+  --scrim: rgba(20, 20, 24, 0.34);
 }
 
 body {
-  background: var(--paper);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  background: radial-gradient(60% 45% at 10% 6%, #ffffff 0, transparent 70%),
+    radial-gradient(50% 45% at 95% 85%, rgba(30, 122, 77, 0.16), transparent 70%),
+    radial-gradient(45% 40% at 85% 12%, rgba(224, 96, 58, 0.12), transparent 70%),
+    var(--backdrop-base);
+  background-attachment: fixed;
 }
 
 /* Tabular numerals for all metrics (Spec §13) */
 .tnum {
   font-variant-numeric: tabular-nums;
+}
+
+@layer components {
+  /* Frosted card on the page. No backdrop blur (it traps pop-ups). */
+  .glass {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.82));
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* The one dark band per screen. Put the glow child <span class="band-glow" aria-hidden> inside. */
+  .band {
+    position: relative;
+    overflow: hidden;
+    color: var(--band-text);
+    border-radius: var(--radius-band);
+    background: radial-gradient(130% 150% at 0% 0%, #2e4237 0, #1a2720 42%, #0f1712 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 2px 4px rgba(16, 24, 19, 0.2),
+      0 30px 50px -28px rgba(16, 24, 19, 0.6);
+  }
+  .band::before {
+    content: "";
+    position: absolute;
+    right: -90px;
+    bottom: -150px;
+    width: 380px;
+    height: 280px;
+    background: radial-gradient(closest-side, rgba(224, 96, 58, 0.42), transparent);
+    pointer-events: none;
+  }
+  .band > * {
+    position: relative;
+  }
+  .band-edge {
+    box-shadow: inset 3px 0 0 var(--ember);
+  }
+
+  /* Solid surfaces for anything floating: sheets, pop-ups, menus, toasts, nav. */
+  .pop {
+    background: var(--card);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-pop);
+  }
+
+  /* Buttons: ink primary with a rationed accent edge; white secondary. */
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 0 16px;
+    border-radius: var(--radius-control);
+    background: var(--ink);
+    color: #ffffff;
+    font-weight: 700;
+    box-shadow: inset 3px 0 0 var(--ember);
+  }
+  .btn-primary-green {
+    box-shadow: inset 3px 0 0 var(--green);
+  }
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 0 16px;
+    border-radius: var(--radius-control);
+    background: var(--card);
+    color: var(--ink);
+    font-weight: 600;
+    border: 1px solid var(--control-border);
+  }
+  .btn-primary:disabled,
+  .btn-secondary:disabled {
+    opacity: 0.55;
+  }
+
+  /* Plain-word tabs: active = ink 700 + 2px underline + 6px ember dot. */
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .tab[aria-selected="true"],
+  .tab[aria-current="page"] {
+    font-weight: 700;
+    color: var(--ink);
+    box-shadow: inset 0 -2px 0 var(--ink);
+  }
+  .tab[aria-selected="true"]::before,
+  .tab[aria-current="page"]::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ember);
+  }
+
+  /* Small status marks (7px corners, not round pills). */
+  .mark {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 7px;
+    border-radius: var(--radius-mark);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .mark-green {
+    background: var(--green-soft);
+    color: var(--green);
+  }
+  .mark-amber {
+    background: var(--amber-soft);
+    color: var(--amber-text);
+  }
+  .mark-neutral {
+    background: var(--segment);
+    color: var(--muted);
+  }
+
+  /* Inputs */
+  .field {
+    min-height: 44px;
+    border-radius: 12px;
+    border: 1px solid var(--control-border);
+    background: var(--field);
+    padding: 0 12px;
+    color: var(--ink);
+  }
 }

@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { generateJson } from "@/lib/ai-json";
 import { AI_BUDGET_SECONDS } from "@/lib/anthropic";
 import { deadlineAfter } from "@/lib/ai-call";
+import { getUserTz } from "@/lib/goal-change";
+import { todayLocal } from "@/lib/time";
 import {
   PROGRAM_JSON_SCHEMA,
   validateProgram,
@@ -20,10 +22,6 @@ export type GenerateResult =
   | { ok: false; error: string };
 
 export type ApproveResult = { ok: true } | { ok: false; error: string };
-
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 // Generate a first program via Claude. Returns the validated JSON for PREVIEW —
 // nothing is written to the DB until the user approves (Doc 02 §1: signup ends
@@ -90,6 +88,7 @@ export async function generateProgram(): Promise<GenerateResult> {
 
   // Forced tool use returns the §3c JSON; validateProgram is the source of truth.
   const r = await generateJson({
+    job: "program",
     system: PROGRAM_SYSTEM_PROMPT,
     user: buildProgramUserMessage(inputs),
     schema: PROGRAM_JSON_SCHEMA,
@@ -97,6 +96,7 @@ export async function generateProgram(): Promise<GenerateResult> {
     maxTokens: 16000,
     deadline,
     effort: "medium",
+    track: { supabase, userId: user.id },
   });
   if (!r.ok) return { ok: false, error: r.error };
   const result = validateProgram(r.data);
@@ -120,13 +120,8 @@ export async function approveProgram(
   if (!check.ok) return { ok: false, error: check.error };
   const prog = check.program;
 
-  // 1. Deactivate existing active program(s).
-  const { error: deactErr } = await supabase
-    .from("programs")
-    .update({ active: false })
-    .eq("user_id", user.id)
-    .eq("active", true);
-  if (deactErr) return { ok: false, error: "Couldn't update your programs." };
+  // The new program is written INACTIVE first; the old one is only switched
+  // off once everything saved, so a failure never leaves you without a program.
 
   // 2. Resolve exercise names → ids (unique per user, case-insensitive).
   const byLower = new Map<string, { name: string; category: string | null }>();
@@ -161,21 +156,29 @@ export async function approveProgram(
       idByLower.set((row.name as string).toLowerCase(), row.id as string);
   }
 
-  // 3. Insert the program.
+  // 3. Insert the program — week 1 starts today (the user's local date).
+  const today = todayLocal(await getUserTz(supabase, user.id));
   const { data: programRow, error: pErr } = await supabase
     .from("programs")
     .insert({
       user_id: user.id,
       name: prog.program.name,
       goal: prog.program.goal,
-      active: true,
-      week_start: todayISO(),
+      active: false,
+      week_start: today,
+      current_week: 1,
+      week_started_on: today,
     })
     .select("id")
     .single();
   if (pErr || !programRow)
     return { ok: false, error: "Couldn't save your program." };
   const programId = programRow.id as string;
+  const discard = async (msg: string): Promise<ApproveResult> => {
+    // Deleting the program cascades to its days + exercises.
+    await supabase.from("programs").delete().eq("id", programId).eq("user_id", user.id);
+    return { ok: false, error: msg };
+  };
 
   // 4. Insert days.
   const { data: dayRows, error: dErr } = await supabase
@@ -190,8 +193,7 @@ export async function approveProgram(
       }))
     )
     .select("id, day_index");
-  if (dErr || !dayRows)
-    return { ok: false, error: "Couldn't save your program days." };
+  if (dErr || !dayRows) return discard("Couldn't save your program days.");
   const dayIdByIndex = new Map<number, string>();
   for (const row of dayRows)
     dayIdByIndex.set(row.day_index as number, row.id as string);
@@ -225,8 +227,24 @@ export async function approveProgram(
     const { error: peErr } = await supabase
       .from("program_exercises")
       .insert(peRows);
-    if (peErr) return { ok: false, error: "Couldn't save your exercises." };
+    if (peErr) return discard("Couldn't save your exercises.");
   }
+
+  // Swap: new one ON first (the newest active wins, so a moment with two is
+  // harmless), then the old one(s) off — you're never left without a program.
+  const { error: actErr } = await supabase
+    .from("programs")
+    .update({ active: true })
+    .eq("id", programId)
+    .eq("user_id", user.id);
+  if (actErr) return discard("Couldn't switch on your new program. Try again.");
+  const { error: deactErr } = await supabase
+    .from("programs")
+    .update({ active: false })
+    .eq("user_id", user.id)
+    .eq("active", true)
+    .neq("id", programId);
+  if (deactErr) console.error(`[approveProgram] old program still active: ${deactErr.message}`);
 
   return { ok: true };
 }

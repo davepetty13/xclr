@@ -124,13 +124,31 @@ export const PROGRAM_JSON_SCHEMA = {
 
 // Display a load value + type distinctly (Design Brief §4). Never flatten types.
 export function formatLoad(value: number | null, type: LoadType | null): string {
-  if (type === "bodyweight") return "Bodyweight";
+  if (type === "bodyweight") return value != null && value > 0 ? `Bodyweight + ${value} kg` : "Bodyweight";
   if (value == null || type == null || type === "none") return "";
   if (type === "total_kg") return `${value} kg`;
   if (type === "per_side_kg") return `${value} kg/side`;
   if (type === "assist_kg") return `${value} kg assist`;
   if (type === "time_min") return `${value} min`;
   return "";
+}
+
+// Unit label for a load input or a logged set, e.g. "60 kg / side × 8".
+export function loadUnitLabel(type: LoadType | null | undefined): string {
+  switch (type) {
+    case "total_kg":
+      return "kg";
+    case "per_side_kg":
+      return "kg / side";
+    case "assist_kg":
+      return "kg assist";
+    case "time_min":
+      return "min";
+    case "bodyweight":
+      return "kg added";
+    default:
+      return "load";
+  }
 }
 
 // ---- validation / normalization ----

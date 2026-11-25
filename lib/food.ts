@@ -18,18 +18,24 @@ export async function upsertFoodLibrary(
   supabase: Supa,
   userId: string,
   m: FoodMacros
-): Promise<void> {
+): Promise<string | null> {
   const name = m.name.trim();
-  if (!name) return;
-  const { data: existing } = await supabase
+  if (!name) return null;
+  // Escape LIKE wildcards so "100% juice" only matches itself.
+  const pattern = name.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const { data: existing, error: selErr } = await supabase
     .from("food_library")
     .select("id")
     .eq("user_id", userId)
-    .ilike("name", name)
+    .ilike("name", pattern)
     .maybeSingle();
+  if (selErr) {
+    console.error(`[food_library select] ${selErr.message}`);
+    return selErr.message;
+  }
 
   if (existing) {
-    await supabase
+    const { error } = await supabase
       .from("food_library")
       .update({
         serving: m.serving,
@@ -39,9 +45,12 @@ export async function upsertFoodLibrary(
         fat_g: m.fat_g,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", existing.id as string);
+      .eq("id", existing.id as string)
+      .eq("user_id", userId);
+    if (error) console.error(`[food_library update] ${error.message}`);
+    return error?.message ?? null;
   } else {
-    await supabase.from("food_library").insert({
+    const { error } = await supabase.from("food_library").insert({
       user_id: userId,
       name,
       serving: m.serving,
@@ -50,5 +59,7 @@ export async function upsertFoodLibrary(
       carbs_g: m.carbs_g,
       fat_g: m.fat_g,
     });
+    if (error) console.error(`[food_library insert] ${error.message}`);
+    return error?.message ?? null;
   }
 }

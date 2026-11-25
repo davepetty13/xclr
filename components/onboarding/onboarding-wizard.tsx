@@ -544,7 +544,7 @@ export function OnboardingWizard({ initialName }: { initialName: string }) {
           next();
         }}
       >
-        <label className="flex items-start gap-3 rounded-tile border border-line bg-card p-4">
+        <label className="glass flex items-start gap-3 p-4">
           <input
             type="checkbox"
             checked={data.health_consent}
@@ -567,7 +567,7 @@ export function OnboardingWizard({ initialName }: { initialName: string }) {
         {data.health_consent ? (
           <div className="space-y-3">
             {data.medical_conditions.map((c, i) => (
-              <div key={i} className="space-y-2 rounded-tile border border-line bg-card p-3">
+              <div key={i} className="glass space-y-2 p-3">
                 <AutoGrowTextarea
                   value={c.condition}
                   onChange={(v) => setCondition(i, { condition: v })}
@@ -583,7 +583,7 @@ export function OnboardingWizard({ initialName }: { initialName: string }) {
                 <button
                   type="button"
                   onClick={() => removeCondition(i)}
-                  className="py-3 text-sm font-semibold text-muted transition-opacity hover:opacity-80"
+                  className="min-h-[44px] text-sm font-semibold text-muted transition-opacity hover:opacity-80"
                 >
                   Remove
                 </button>
@@ -592,7 +592,7 @@ export function OnboardingWizard({ initialName }: { initialName: string }) {
             <button
               type="button"
               onClick={addCondition}
-              className="w-full rounded-chip border border-line bg-paper px-4 py-3 text-sm font-semibold text-ink transition-opacity hover:opacity-80"
+              className="btn-secondary w-full text-sm"
             >
               + Add a condition
             </button>
@@ -620,8 +620,8 @@ export function OnboardingWizard({ initialName }: { initialName: string }) {
       busy={busy}
       error={error}
     >
-      <div className="rounded-tile border border-line bg-card p-6 text-center">
-        <p className="tnum font-serif text-6xl font-medium text-ink">
+      <div className="glass p-6 text-center">
+        <p className="tnum font-display text-6xl font-bold tracking-[-0.02em] text-ink">
           {bmi > 0 ? bmi.toFixed(1) : "—"}
         </p>
         <p className="mt-1 text-sm font-semibold text-muted">
