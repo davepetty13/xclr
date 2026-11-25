@@ -43,7 +43,7 @@ export function QuickLog({ items }: { items: QuickLogItem[] }) {
       </div>
       {items.length === 0 ? (
         <p className="text-[13px] text-muted">
-          Dishes you log in Chat land here, ready to log again with one tap.
+          Dishes you save to your library in Coach land here, ready to log again with one tap.
         </p>
       ) : null}
       <div className="flex flex-wrap gap-2">

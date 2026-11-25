@@ -314,7 +314,9 @@ export default async function TodayPage() {
           </p>
         ) : foods.length === 0 ? (
           <p className="glass p-4 text-sm font-medium text-muted">
-            Nothing logged yet. Tap a dish above, or tell your coach what you ate.
+            {quickItems.length
+              ? "Nothing logged yet. Tap a dish above, or tell your coach what you ate."
+              : "Nothing logged yet. Tell your coach what you ate."}
           </p>
         ) : (
           <div className="glass px-3.5 py-0.5">

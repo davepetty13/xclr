@@ -157,8 +157,8 @@ export function FoodTab({
       {library.length === 0 ? (
         <div className="glass flex flex-col gap-3 p-4">
           <p className="text-sm font-medium text-muted">
-            Your library is empty for now. Log a dish once in Coach, or confirm an estimate below, and it shows
-            up here for one-tap adding.
+            No saved dishes yet. When you log food in Coach, tap <strong className="text-ink">Save to library</strong>{" "}
+            on it (or fix an estimate in Logged today) and it shows up here for one-tap adding.
           </p>
           <a href="/chat" className="btn-primary btn-primary-green self-start px-4 text-[13px]">
             Log a dish in Coach
@@ -212,7 +212,9 @@ export function FoodTab({
         </p>
       ) : foods.length === 0 ? (
         <p className="glass p-4 text-sm font-medium text-muted">
-          Nothing yet. Tap a dish above, or tell your coach in Chat.
+          {library.length
+            ? "Nothing yet. Tap a dish above, or tell your coach in Chat."
+            : "Nothing yet. Tell your coach what you ate in Chat."}
         </p>
       ) : (
         <ul aria-label="Logged today" className="glass px-3.5 py-0.5">
