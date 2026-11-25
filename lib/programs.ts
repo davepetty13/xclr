@@ -41,6 +41,9 @@ export type WeekDay = {
   type: string | null;
   done: boolean;
   inWeek: boolean; // planned for this (possibly short) calendar week
+  skipped: boolean; // skipped this week (and not logged after all)
+  skipId: string | null;
+  skipNote: string | null;
 };
 
 export type WeekStatus = {
@@ -50,6 +53,7 @@ export type WeekStatus = {
   weekStartISO: string; // UTC instant the week started (local midnight)
   days: WeekDay[];
   doneCount: number;
+  skippedCount: number;
   plannedCount: number; // training days planned this week (fits the days left)
   nextDay: WeekDay | null; // first planned training day not done yet this week
   weekComplete: boolean; // all planned days done, or the week (Sunday) has passed
@@ -124,8 +128,8 @@ export async function getWeekStatus(
     (prog.created_at ? localDate(tz, new Date(prog.created_at as string)) : todayLocal(tz));
   const weekStartISO = localDayStartISO(weekStartedOn, tz);
 
-  // Days and this week's sessions at the same time (was one after the other).
-  const [{ data: dayRows }, { data: sessions }] = await Promise.all([
+  // Days, this week's sessions and skips at the same time.
+  const [{ data: dayRows }, { data: sessions }, { data: skipRows }] = await Promise.all([
     supabase
       .from("program_days")
       .select("id, day_index, label, type")
@@ -138,7 +142,16 @@ export async function getWeekStatus(
       .eq("user_id", userId)
       .not("program_day_id", "is", null)
       .gte("performed_at", weekStartISO),
+    supabase
+      .from("day_skips")
+      .select("id, program_day_id, note")
+      .eq("user_id", userId)
+      .eq("program_id", program.id)
+      .eq("week_started_on", weekStartedOn),
   ]);
+  const skipByDay = new Map<string, { id: string; note: string | null }>();
+  for (const k of skipRows ?? [])
+    skipByDay.set(k.program_day_id as string, { id: k.id as string, note: (k.note as string | null) ?? null });
   const rows = dayRows ?? [];
   const dayIds = new Set(rows.map((d) => d.id as string));
   const doneIds = new Set<string>();
@@ -162,12 +175,22 @@ export async function getWeekStatus(
     Math.round((Date.parse(`${weekEndsOn}T00:00:00Z`) - Date.parse(`${weekStartedOn}T00:00:00Z`)) / 86_400_000) + 1;
   const trainingBase = base.filter((d) => d.type !== "rest");
   const keep = fitWeek(trainingBase, slots);
-  const days: WeekDay[] = base.map((d) => ({ ...d, inWeek: d.type !== "rest" && keep.has(d.id) }));
+  const days: WeekDay[] = base.map((d) => {
+    const skip = d.done ? undefined : skipByDay.get(d.id);
+    return {
+      ...d,
+      inWeek: d.type !== "rest" && keep.has(d.id),
+      skipped: !!skip,
+      skipId: skip?.id ?? null,
+      skipNote: skip?.note ?? null,
+    };
+  });
 
   const planned = days.filter((d) => d.inWeek);
   const doneCount = planned.filter((d) => d.done).length;
+  const skippedCount = planned.filter((d) => d.skipped).length;
   const weekEnded = today > weekEndsOn;
-  const nextDay = weekEnded ? null : planned.find((d) => !d.done) ?? null;
+  const nextDay = weekEnded ? null : planned.find((d) => !d.done && !d.skipped) ?? null;
 
   return {
     program,
@@ -176,6 +199,7 @@ export async function getWeekStatus(
     weekStartISO,
     days,
     doneCount,
+    skippedCount,
     plannedCount: planned.length,
     nextDay,
     weekComplete: weekEnded || (planned.length > 0 && nextDay == null),

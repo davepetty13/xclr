@@ -34,6 +34,7 @@ export function LogSession({
   const router = useRouter();
   const [cells, setCells] = useState<Record<string, Cell>>({});
   const [note, setNote] = useState("");
+  const [noteOpen, setNoteOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -337,19 +338,32 @@ export function LogSession({
         </section>
       ) : null}
 
-      <div className="glass flex flex-col gap-1.5 px-3.5 py-3">
-        <label className="text-sm font-bold text-ink" htmlFor="session-note">
-          Session note
-        </label>
-        <textarea
-          id="session-note"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          rows={2}
-          placeholder="e.g. felt strong, or wrist a bit sore today"
-          className="field w-full resize-none py-3 text-sm font-medium outline-none placeholder:text-muted focus:border-green"
-        />
-      </div>
+      {noteOpen || note ? (
+        <div className="glass flex flex-col gap-1.5 px-3.5 py-3">
+          <label className="text-sm font-bold text-ink" htmlFor="session-note">
+            Session note <span className="font-medium text-muted">(optional)</span>
+          </label>
+          <textarea
+            id="session-note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={2}
+            maxLength={1000}
+            autoFocus={noteOpen && !note}
+            placeholder="e.g. felt strong, or wrist a bit sore today"
+            className="field w-full resize-none py-3 text-sm font-medium outline-none placeholder:text-muted focus:border-green"
+          />
+          <p className="text-[11px] text-muted">Your coach reads this in the weekly review.</p>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setNoteOpen(true)}
+          className="btn-secondary self-start px-3 text-[13px]"
+        >
+          + Add a session note
+        </button>
+      )}
 
       {error ? (
         <p

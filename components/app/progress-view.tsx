@@ -45,21 +45,21 @@ export function ProgressView({ exercises }: { exercises: ProgressExercise[] }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Exercise">
-        {exercises.map((e) => (
-          <button
-            key={e.id}
-            type="button"
-            onClick={() => setSel(e.id)}
-            aria-pressed={e.id === ex.id}
-            className={`inline-flex min-h-[44px] items-center rounded-control px-3 text-xs font-semibold ${
-              e.id === ex.id ? "bg-ink text-card" : "border border-hairline bg-card text-ink"
-            }`}
-          >
-            {e.name}
-          </button>
-        ))}
-      </div>
+      {/* Compact exercise picker (dropdown instead of a wall of pills). */}
+      <label className="flex flex-col gap-1">
+        <span className="sr-only">Exercise</span>
+        <select
+          value={ex.id}
+          onChange={(e) => setSel(e.target.value)}
+          className="field w-full bg-card text-sm font-semibold"
+        >
+          {exercises.map((e) => (
+            <option key={e.id} value={e.id}>
+              {e.name}
+            </option>
+          ))}
+        </select>
+      </label>
 
       <section aria-label={`${ex.name} progress`} className="glass px-4 py-3.5">
         <div className="flex items-baseline justify-between gap-3">

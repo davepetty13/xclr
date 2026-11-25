@@ -256,7 +256,9 @@ export default async function TodayPage() {
                   const isNext = next?.id === d.id;
                   const cls = d.done
                     ? "bg-green"
-                    : isNext
+                    : d.skipped
+                      ? "bg-segment shadow-[inset_0_0_0_2px_var(--faint)]"
+                      : isNext
                       ? "shadow-[inset_0_0_0_2px_var(--ember)]"
                       : "bg-line";
                   return <li key={d.id} aria-hidden className={`h-[13px] w-[13px] rounded ${cls}`} />;

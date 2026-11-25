@@ -4,9 +4,9 @@ import { createClient } from "@/lib/supabase/server";
 import { generateJson } from "@/lib/ai-json";
 import { AI_BUDGET_SECONDS } from "@/lib/anthropic";
 import { deadlineAfter } from "@/lib/ai-call";
-import { getActiveProgram } from "@/lib/programs";
+import { getActiveProgram, getWeekStatus } from "@/lib/programs";
 import { getUserTz } from "@/lib/goal-change";
-import { addDays, localDayStartISO, todayLocal } from "@/lib/time";
+import { addDays, localDate, localDayStartISO, todayLocal } from "@/lib/time";
 import {
   PROPOSAL_JSON_SCHEMA,
   validateProposal,
@@ -41,16 +41,17 @@ type Supa = ReturnType<typeof createClient>;
 async function loadWeek(supabase: Supa, userId: string, programId: string, tz: string) {
   const { data } = await supabase
     .from("programs")
-    .select("current_week, week_started_on, week_start")
+    .select("current_week, week_started_on, week_start, created_at")
     .eq("id", programId)
     .eq("user_id", userId)
     .maybeSingle();
+  // Same fallback chain as getWeekStatus, so skips and reviews agree on the week.
   return {
     week: Number(data?.current_week) || 1,
     startedOn:
       (data?.week_started_on as string | null) ??
       (data?.week_start as string | null) ??
-      todayLocal(tz),
+      (data?.created_at ? localDate(tz, new Date(data.created_at as string)) : todayLocal(tz)),
   };
 }
 
@@ -264,7 +265,28 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
   if (toISO) sessQ = sessQ.lt("performed_at", toISO);
   const { data: sessRows } = await sessQ;
   const sessionIds = (sessRows ?? []).map((r) => r.id as string);
-  if (!sessionIds.length)
+
+  // Days skipped in the reviewed week (+ the user's reasons) — the coach weighs these.
+  const { data: dayLabels } = await supabase
+    .from("program_days")
+    .select("id, day_index, label")
+    .eq("user_id", user.id)
+    .eq("program_id", program.id);
+  const labelById = new Map<string, string>();
+  for (const d of dayLabels ?? [])
+    labelById.set(d.id as string, `Day ${d.day_index}${d.label ? ` (${d.label})` : ""}`);
+  const { data: skipRows } = await supabase
+    .from("day_skips")
+    .select("program_day_id, note")
+    .eq("user_id", user.id)
+    .eq("program_id", program.id)
+    .eq("week_started_on", fromDate);
+  const skipped = (skipRows ?? []).map((k) => ({
+    day: labelById.get(k.program_day_id as string) ?? "A training day",
+    note: ((k.note as string | null) ?? "").trim() || null,
+  }));
+
+  if (!sessionIds.length && !skipped.length)
     return { ok: false, error: "No sessions logged this week yet. Log a workout first." };
 
   const { data: setLogs } = await supabase
@@ -339,6 +361,7 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
   const ctx: ReviewContext = {
     exercises,
     notes,
+    skipped,
     avg_sleep_min: avgSleep,
     weight_trend: weightTrend,
   };
@@ -500,5 +523,65 @@ export async function applyProposal(
   // Repeat or Fresh separately (decision 4). `startNextWeek` is ignored.
   void startNextWeek;
 
+  return { ok: true };
+}
+
+
+// ── Skip a day ──────────────────────────────────────────────────────────────
+// Marks a planned training day as skipped for THIS week, with an optional note
+// ("sick", "work ran late"). Nothing about the program changes; the weekly
+// review reads skips + notes so the coach can adjust kindly.
+export async function skipDay(programDayId: string, note?: string): Promise<SimpleResult> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "You're signed out." };
+  if (typeof programDayId !== "string" || !programDayId)
+    return { ok: false, error: "Pick a day to skip." };
+
+  const tz = await getUserTz(supabase, user.id);
+  const status = await getWeekStatus(supabase, user.id, tz);
+  if (!status) return { ok: false, error: "No active program." };
+  if (status.weekEnded) return { ok: false, error: "This week has ended. Start a new week first." };
+  const day = status.days.find((d) => d.id === programDayId);
+  if (!day) return { ok: false, error: "That day isn't in your current program. Refresh and try again." };
+  if (day.type === "rest") return { ok: false, error: "Rest days don't need skipping." };
+  if (!day.inWeek) return { ok: false, error: "That day isn't planned this week." };
+  if (day.done) return { ok: false, error: "You already logged this day." };
+  if (day.skipped) return { ok: true };
+
+  // One line, no double quotes: the note is quoted inside the review prompt.
+  const clean =
+    typeof note === "string"
+      ? note.replace(/[\r\n\t]+/g, " ").replace(/"/g, "'").trim().slice(0, 300)
+      : "";
+  const { error } = await supabase.from("day_skips").insert({
+    user_id: user.id,
+    program_id: status.program.id,
+    program_day_id: programDayId,
+    week_started_on: status.weekStartedOn,
+    note: clean || null,
+  });
+  if (error && error.code === "23505") return { ok: true }; // already skipped (double tap)
+  if (error) {
+    console.error(`[skipDay] ${error.message}`);
+    return { ok: false, error: "Couldn't skip that day. Try again." };
+  }
+  return { ok: true };
+}
+
+export async function undoSkip(skipId: string): Promise<SimpleResult> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "You're signed out." };
+  if (typeof skipId !== "string" || !skipId) return { ok: false, error: "Nothing to undo." };
+  const { error } = await supabase.from("day_skips").delete().eq("id", skipId).eq("user_id", user.id);
+  if (error) {
+    console.error(`[undoSkip] ${error.message}`);
+    return { ok: false, error: "Couldn't undo the skip. Try again." };
+  }
   return { ok: true };
 }

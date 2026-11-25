@@ -28,7 +28,8 @@ The user's local calendar day (`profiles.timezone`, default Asia/Manila) — nev
 - `programs.current_week`, `programs.week_started_on`. Train shows "Week N · done/planned · Next day".
 - Weeks run **Monday–Sunday** (calendar). Starting a week mid-week makes a **short week**: only as many training days as there are days left before Sunday (Thursday → 4). Days already done stay; then main lifting days are kept, cardio next, recovery/light days drop first. Dropped days show "not this week".
 - After Sunday the week is over: Today and Train ask **Repeat or Fresh** (never automatic).
-- Default day = first planned training day not yet logged this week.
+- Default day = first planned training day not yet logged or skipped this week.
+- **Skip a day** (Train → "Skip this day"): marks a planned day skipped for this week with an optional reason (≤300 chars), with Undo. Skipped days count as handled (the week can complete), show "skipped" on Train and Today, and are sent with their reasons to the weekly review, which treats them as context, never failure (no progression from skipped-only exercises; illness/pain → hold or ease off). Table `day_skips` (migration 006).
 - Starting a new week always asks **Repeat week N** or **Fresh week N+1**. Unfinished days simply stay unlogged (history = skipped).
 - Weekly review: every card needs an explicit Approve or Keep; the "current value" shown comes from the program, never the model. Saving decisions never starts a week by itself.
 

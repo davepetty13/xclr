@@ -1,10 +1,11 @@
 import { prettyDate } from "@/lib/time";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { getWeekStatus } from "@/lib/programs";
 import { getUserTz } from "@/lib/goal-change";
 import { LogSession, type LogExercise } from "@/components/app/log-session";
 import type { LoadType } from "@/lib/program-schema";
+import { SkipDay } from "./skip-day";
+import { DayPicker } from "./day-picker";
 import { NewWeek } from "./new-week";
 import { getCurrentUser } from "@/lib/session";
 
@@ -111,6 +112,7 @@ export default async function WorkoutTodayPage({
             <span className="text-xs font-normal text-band-secondary">
               {" "}
               / {status.plannedCount} done
+              {status.skippedCount ? ` · ${status.skippedCount} skipped` : ""}
             </span>
           </p>
         </div>
@@ -143,44 +145,39 @@ export default async function WorkoutTodayPage({
 
       <NewWeek week={status.week} weekComplete={status.weekComplete} weekEnded={status.weekEnded} />
 
-      {/* Day selector */}
-      <nav aria-label="Program days" className="flex flex-wrap gap-2">
-        {dayList.map((d) => {
-          const active = d.id === day.id;
-          return (
-            <Link
-              key={d.id}
-              href={`/workout?day=${d.id}`}
-              aria-current={active ? "page" : undefined}
-              className={`inline-flex min-h-[44px] items-center rounded-control px-3 text-xs font-semibold ${
-                active
-                  ? "bg-ink text-card"
-                  : "border border-hairline bg-card text-ink"
-              }`}
-            >
-              Day {d.day_index}
-              {d.label ? ` · ${d.label}` : ""}
-              {d.done ? (
-                <span className={`ml-1 ${active ? "text-green-on-dark" : "text-green"}`}>
-                  · done
-                </span>
-              ) : d.type !== "rest" && !d.inWeek ? (
-                <span className={`ml-1 font-medium ${active ? "text-band-secondary" : "text-muted"}`}>
-                  · not this week
-                </span>
-              ) : null}
-            </Link>
-          );
-        })}
-      </nav>
+      {/* Day selector: compact dropdown + status beside it */}
+      <DayPicker
+        selectedId={day.id}
+        days={dayList.map((d) => ({
+          id: d.id,
+          name: `Day ${d.day_index}${d.label ? ` · ${d.label}` : ""}`,
+          status: d.done
+            ? "done"
+            : d.skipped
+              ? "skipped"
+              : d.type === "rest"
+                ? "rest"
+                : !d.inWeek
+                  ? "off"
+                  : null,
+        }))}
+      />
 
       <div className="flex items-baseline justify-between px-1 pt-1">
         <h2 className="font-display text-lg font-bold tracking-[-0.01em] text-ink">
           Day {day.day_index}
           {day.label ? ` · ${day.label}` : ""}
         </h2>
-        {day.done ? <span className="mark mark-green">Done</span> : null}
       </div>
+
+      {day.type !== "rest" && day.inWeek && !day.done && !status.weekEnded ? (
+        <SkipDay
+          dayId={day.id}
+          dayName={`Day ${day.day_index}`}
+          skipId={day.skipId}
+          skipNote={day.skipNote}
+        />
+      ) : null}
 
       {day.type === "rest" || exercises.length === 0 ? (
         <p className="glass p-4 text-sm font-medium text-muted">
