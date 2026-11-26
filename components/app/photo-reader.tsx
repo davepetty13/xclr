@@ -318,37 +318,63 @@ export function PhotoReader({
           .
         </p>
       ) : (
-        <label
-          className={`glass flex min-h-[56px] cursor-pointer items-center justify-center gap-2 !rounded-band px-4 py-4 text-sm font-bold text-ink ${
-            busy ? "pointer-events-none opacity-60" : ""
-          }`}
-        >
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-            className="text-green"
-          >
-            <path d="M4 8h3l2-3h6l2 3h3v11H4z" />
-            <circle cx="12" cy="13" r="3.5" />
-          </svg>
-          {busy ? "Working…" : photo || preview ? "Take another photo" : "Take or choose a photo"}
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="sr-only"
-            onChange={onFile}
-            disabled={busy}
-          />
-        </label>
+        <div className={`grid grid-cols-2 gap-2.5 ${busy ? "pointer-events-none opacity-60" : ""}`}>
+          {/* Camera: opens the camera straight away on phones. */}
+          <label className="glass flex min-h-[56px] cursor-pointer flex-col items-center justify-center gap-1 !rounded-band px-3 py-3.5 text-center text-sm font-bold text-ink">
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              className="text-green"
+            >
+              <path d="M4 8h3l2-3h6l2 3h3v11H4z" />
+              <circle cx="12" cy="13" r="3.5" />
+            </svg>
+            {busy ? "Working…" : "Take a photo"}
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="sr-only"
+              onChange={onFile}
+              disabled={busy}
+            />
+          </label>
+          {/* Library: no `capture`, so phones offer Photo Library / Files. */}
+          <label className="glass flex min-h-[56px] cursor-pointer flex-col items-center justify-center gap-1 !rounded-band px-3 py-3.5 text-center text-sm font-bold text-ink">
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              className="text-green"
+            >
+              <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+              <circle cx="9" cy="10" r="1.8" />
+              <path d="M20.5 16l-5-5-8 8.5" />
+            </svg>
+            {busy ? "Working…" : "Choose from photos"}
+            <input
+              type="file"
+              accept="image/*"
+              className="sr-only"
+              onChange={onFile}
+              disabled={busy}
+            />
+          </label>
+        </div>
       )}
 
       {status ? (
