@@ -4,21 +4,32 @@ import { createClient } from "@/lib/supabase/server";
 import { AI_BUDGET_SECONDS, MODELS } from "@/lib/anthropic";
 import { createMessage, deadlineAfter } from "@/lib/ai-call";
 import { generateJson } from "@/lib/ai-json";
-import { PARSE_JSON_SCHEMA, normalizeParse, MEALS, type ParsedInput } from "@/lib/parse-schema";
+import {
+  PARSE_JSON_SCHEMA,
+  normalizeParse,
+  numbersInText,
+  appearsIn,
+  MEALS,
+  type ParsedCorrection,
+  type ParsedInput,
+} from "@/lib/parse-schema";
 import {
   PARSE_SYSTEM_PROMPT,
   buildCoachSystemPrompt,
   parseUserMessage,
   type CoachContext,
   type CoachPersona,
+  type ParseContext,
 } from "@/lib/chat-prompts";
 import {
   matchLibraryMessage,
   loggedFoodsLine,
+  fixedFoodLine,
   patchCard,
   type CardFood,
   type CardRef,
   type ChatCard,
+  type FoodSnapshot,
   type LibraryRow,
 } from "@/lib/chat-library";
 import { getUserTz, previewTargets, GOAL_LABEL } from "@/lib/goal-change";
@@ -127,6 +138,8 @@ function sameServing(stated: string | null, saved: string | null): boolean {
 function resolveWithLibrary(items: CardFood[], lib: LibraryRow[]): CardFood[] {
   const byLower = new Map(lib.map((r) => [r.name.toLowerCase(), r]));
   return items.map((f) => {
+    // Numbers the user typed beat the library too.
+    if (f.user_stated) return { ...f, library_id: null, is_estimate: false };
     const known = byLower.get(f.name.trim().toLowerCase());
     if (!known) return { ...f, library_id: null };
     // Only use the saved numbers when the portion is the saved one. "2 cups
@@ -207,6 +220,134 @@ async function persistTurn(
     return null;
   }
   return (data?.id as string) ?? null;
+}
+
+// ---------- recent context + corrections ----------
+
+type RecentFood = FoodSnapshot & { id: string; meal: string | null; logged_at: string };
+
+const RECENT_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+// What the parser may refer back to: the user's last ≤3 food logs from the last
+// 2 hours (newest first, so index 0 = most recent) and the previous exchange.
+async function loadRecentContext(
+  supabase: Supa,
+  userId: string
+): Promise<{ foods: RecentFood[]; prompt: ParseContext }> {
+  const now = Date.now();
+  const { data: rows, error: fErr } = await supabase
+    .from("food_logs")
+    .select("id, name, serving, kcal, protein_g, carbs_g, fat_g, meal, logged_at, is_estimate")
+    .eq("user_id", userId)
+    .gte("logged_at", new Date(now - RECENT_WINDOW_MS).toISOString())
+    .lte("logged_at", new Date(now + 60_000).toISOString())
+    .order("logged_at", { ascending: false })
+    .limit(3);
+  if (fErr) console.error(`[chat recent foods] ${fErr.message}`);
+  const n = (v: unknown) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  const foods: RecentFood[] = (rows ?? []).map((r) => ({
+    id: r.id as string,
+    name: r.name as string,
+    serving: (r.serving as string | null) ?? null,
+    kcal: n(r.kcal),
+    protein_g: n(r.protein_g),
+    carbs_g: n(r.carbs_g),
+    fat_g: n(r.fat_g),
+    is_estimate: r.is_estimate !== false,
+    meal: (r.meal as string | null) ?? null,
+    logged_at: r.logged_at as string,
+  }));
+
+  // The turn being answered isn't persisted yet, so the newest two are the previous exchange.
+  const { data: msgs, error: mErr } = await supabase
+    .from("messages")
+    .select("role, content")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(2);
+  if (mErr) console.error(`[chat recent messages] ${mErr.message}`);
+  const prevUser = (msgs ?? []).find((m) => m.role === "user")?.content as string | undefined;
+  const prevReply = (msgs ?? []).find((m) => m.role === "coach")?.content as string | undefined;
+
+  return {
+    foods,
+    prompt: {
+      foods: foods.map((f) => ({
+        ...f,
+        minutes_ago: Math.max(0, Math.round((now - Date.parse(f.logged_at)) / 60_000)),
+      })),
+      prev_user: prevUser ? prevUser.slice(0, 300) : null,
+      prev_reply: prevReply ? prevReply.slice(0, 300) : null,
+    },
+  };
+}
+
+type FixPlan =
+  | { ok: true; target: RecentFood; patch: Partial<FoodSnapshot>; next: FoodSnapshot }
+  | { ok: false; question: string };
+
+const NUM_FIELDS = ["kcal", "protein_g", "carbs_g", "fat_g"] as const;
+
+// Turn the parser's correction into an exact row patch — or ONE question.
+// Only fields the user stated (or that follow from a new amount) change.
+function planCorrection(c: ParsedCorrection, recent: RecentFood[], text: string): FixPlan {
+  if (!recent.length)
+    return { ok: false, question: "I don't see anything logged in the last 2 hours to fix. What should I log?" };
+  const target = c.target_index >= 0 ? recent[c.target_index] : undefined;
+  if (!target) {
+    const names = Array.from(new Set(recent.map((r) => r.name)));
+    return {
+      ok: false,
+      question: names.length > 1 ? `Which one should I fix — ${names.join(" or ")}?` : `Should I fix the ${names[0]}?`,
+    };
+  }
+
+  const typed = numbersInText(text);
+  const patch: Partial<FoodSnapshot> = {};
+  let statedApplied = false;
+  for (const k of NUM_FIELDS) {
+    const v = c[k];
+    if (v == null) continue;
+    if (c.user_stated_numbers) {
+      // "User said so" must be visible in what they typed — else keep the old value.
+      if (!appearsIn(v, typed)) continue;
+      statedApplied = true;
+    }
+    if (v !== target[k]) patch[k] = v;
+  }
+  if (c.serving && c.serving !== target.serving) patch.serving = c.serving;
+  // A new amount with only some numbers typed ("2 cups, 600 kcal"): the other
+  // values follow the new amount too (model-scaled), so the row stays coherent —
+  // but then it's still partly an estimate.
+  let modelFilled = false;
+  if (patch.serving !== undefined && c.user_stated_numbers) {
+    for (const k of NUM_FIELDS) {
+      const v = c[k];
+      if (v == null || patch[k] !== undefined || appearsIn(v, typed)) continue;
+      if (v !== target[k]) {
+        patch[k] = v;
+        modelFilled = true;
+      }
+    }
+  }
+  const renamed = !!c.name && c.name.trim().toLowerCase() !== target.name.trim().toLowerCase();
+  if (renamed) patch.name = c.name!;
+
+  if (!Object.keys(patch).length && !statedApplied)
+    return { ok: false, question: `What should the ${target.name} be — size, calories or protein?` };
+
+  // Typed numbers → no longer an estimate. A new food with model numbers → estimate.
+  patch.is_estimate = statedApplied && !modelFilled ? false : renamed || modelFilled ? true : target.is_estimate;
+  const next: FoodSnapshot = {
+    name: patch.name ?? target.name,
+    serving: patch.serving !== undefined ? patch.serving : target.serving,
+    kcal: patch.kcal !== undefined ? patch.kcal : target.kcal,
+    protein_g: patch.protein_g !== undefined ? patch.protein_g : target.protein_g,
+    carbs_g: patch.carbs_g !== undefined ? patch.carbs_g : target.carbs_g,
+    fat_g: patch.fat_g !== undefined ? patch.fat_g : target.fat_g,
+    is_estimate: patch.is_estimate,
+  };
+  return { ok: true, target, patch, next };
 }
 
 function sharedMeal(foods: { meal: string | null }[]): string | null {
@@ -369,6 +510,7 @@ export async function sendChatMessage(text: string, mode: ChatMode = "log"): Pro
   const lines: string[] = [];
   const failed: string[] = [];
   let todayFoodCard: Extract<ChatCard, { kind: "food" }> | null = null;
+  let fixCard: Extract<ChatCard, { kind: "food_fixed" }> | null = null;
   let callCoach = askOnly;
   let parsed: ParsedInput | null = null;
 
@@ -398,11 +540,12 @@ export async function sendChatMessage(text: string, mode: ChatMode = "log"): Pro
       return { ok: true, reply, cards: [card], messageId, kcal_today: totals.kcal, protein_today: totals.protein };
     }
 
-    // ---- 1b. Haiku parser. ----
+    // ---- 1b. Haiku parser, with recent context so "that" / "you logged it wrong" resolve. ----
+    const recent = await loadRecentContext(supabase, userId);
     const parseResult = await generateJson({
       job: "parse",
       system: PARSE_SYSTEM_PROMPT,
-      user: parseUserMessage(clean, win.date),
+      user: parseUserMessage(clean, win.date, recent.prompt),
       schema: PARSE_JSON_SCHEMA,
       toolName: "log_entry",
       maxTokens: 2000,
@@ -412,6 +555,15 @@ export async function sendChatMessage(text: string, mode: ChatMode = "log"): Pro
     });
     if (!parseResult.ok) return { ok: false, error: parseResult.error };
     parsed = normalizeParse(parseResult.data);
+
+    // A correction updates the old row — never also log the same item again.
+    if (parsed.correction) {
+      const target = recent.foods[parsed.correction.target_index];
+      const names = new Set(
+        [target?.name, parsed.correction.name].filter((x): x is string => !!x).map((x) => x.trim().toLowerCase())
+      );
+      parsed = { ...parsed, foods: parsed.foods.filter((f) => !names.has(f.name.trim().toLowerCase())) };
+    }
 
     // Anti-fabrication guard in CODE (not just the model): a food with no
     // numbers, or a set with neither load nor reps (unless bodyweight / timed),
@@ -442,9 +594,15 @@ export async function sendChatMessage(text: string, mode: ChatMode = "log"): Pro
 
     const hasLoggable = !!(parsed.foods.length || parsed.weight_kg != null || parsed.sleep || parsed.workout);
     const date = resolveLogDate(parsed.log_date, win.date);
+    // A correction with only numbers/size is NOT vague when a recent item fits;
+    // an unclear target or an empty change is → one question.
+    const fixPlan = parsed.correction ? planCorrection(parsed.correction, recent.foods, clean) : null;
 
     // ---- 2. Anti-fabrication: vague → ask ONE question, write NOTHING. ----
-    const clarify = parsed.needs_clarification ?? (hasLoggable && !date ? "Which day was that?" : null);
+    const clarify =
+      parsed.needs_clarification ??
+      (fixPlan && !fixPlan.ok ? fixPlan.question : null) ??
+      (hasLoggable && !date ? "Which day was that?" : null);
     if (clarify) {
       const totals = await todayTotals(supabase, userId, win);
       const messageId = await persistTurn(supabase, userId, clean, clarify, []);
@@ -453,19 +611,57 @@ export async function sendChatMessage(text: string, mode: ChatMode = "log"): Pro
     const day = date ?? win.date;
     const isToday = day === win.date;
 
+    // Correction → UPDATE that row (user-scoped). No new row.
+    if (fixPlan?.ok) {
+      const { target, patch, next } = fixPlan;
+      const { data: upd, error } = await supabase
+        .from("food_logs")
+        .update(patch)
+        .eq("id", target.id)
+        .eq("user_id", userId)
+        .select("id")
+        .maybeSingle();
+      if (error || !upd) {
+        if (error) console.error(`[chat food fix] ${error.message}`);
+        failed.push(`the fix to ${target.name}`);
+      } else {
+        const { id, name, serving, kcal, protein_g, carbs_g, fat_g, is_estimate } = target;
+        fixCard = {
+          key: newKey(cards.length),
+          kind: "food_fixed",
+          item: { id, ...next },
+          previous: { name, serving, kcal, protein_g, carbs_g, fat_g, is_estimate },
+          kcal_today: 0,
+          protein_today: 0,
+          status: "fixed",
+        };
+        cards.push(fixCard);
+        justLogged.push(
+          `corrected ${target.name} → ${next.name}${next.serving ? `, ${next.serving}` : ""}${next.kcal != null ? ` ${Math.round(next.kcal)} kcal` : ""}`
+        );
+      }
+    }
+
     // Foods: today → write now (with Undo). Past day → card, written on tap.
     if (parsed.foods.length) {
       const meal = sharedMeal(parsed.foods);
+      const typedNums = numbersInText(clean);
       const items = resolveWithLibrary(
-        parsed.foods.map((f) => ({
-          name: f.name,
-          serving: f.serving,
-          kcal: f.kcal,
-          protein_g: f.protein_g,
-          carbs_g: f.carbs_g,
-          fat_g: f.fat_g,
-          is_estimate: f.is_estimate,
-        })),
+        parsed.foods.map((f) => {
+          // "Stated" only when the kcal or protein number really is in the message.
+          const stated =
+            f.user_stated_numbers && (appearsIn(f.kcal, typedNums) || appearsIn(f.protein_g, typedNums));
+          return {
+            name: f.name,
+            serving: f.serving,
+            kcal: f.kcal,
+            protein_g: f.protein_g,
+            carbs_g: f.carbs_g,
+            fat_g: f.fat_g,
+            is_estimate: stated ? false : f.user_stated_numbers ? true : f.is_estimate,
+            user_stated: stated,
+          };
+        }),
         lib
       );
       if (isToday) {
@@ -733,7 +929,7 @@ export async function sendChatMessage(text: string, mode: ChatMode = "log"): Pro
       }
     }
 
-    const extracted = hasLoggable || !!parsed.goal_change || !!parsed.health_update;
+    const extracted = hasLoggable || !!fixPlan || !!parsed.goal_change || !!parsed.health_update;
     callCoach = parsed.is_question || !extracted;
   }
 
@@ -745,6 +941,11 @@ export async function sendChatMessage(text: string, mode: ChatMode = "log"): Pro
     lines.unshift(
       loggedFoodsLine(todayFoodCard.meal, todayFoodCard.items.map((f) => f.name), totals.kcal, totals.protein)
     );
+  }
+  if (fixCard) {
+    fixCard.kcal_today = totals.kcal;
+    fixCard.protein_today = totals.protein;
+    lines.unshift(fixedFoodLine(fixCard.item, totals.kcal, totals.protein));
   }
   if (failed.length) lines.push(`Couldn't save ${failed.join(", ")} — try that part again.`);
   const wroteSomething = cards.length > 0 || justLogged.length > 0;
@@ -840,6 +1041,7 @@ export async function addPastFoods(
       carbs_g: nnum(f.carbs_g),
       fat_g: nnum(f.fat_g),
       is_estimate: f.is_estimate !== false,
+      user_stated: f.user_stated === true && f.is_estimate === false,
     });
   }
   if (!cleanItems.length) return { ok: false, error: "Nothing to add." };
@@ -865,6 +1067,42 @@ export async function undoFoodLogs(ids: string[], ref?: CardRef | null): Promise
   if (error) {
     console.error(`[chat undo food] ${error.message}`);
     return { ok: false, error: "Couldn't undo that. Try again." };
+  }
+  await patchCard(supabase, user.id, ref, { status: "undone" });
+  return { ok: true };
+}
+
+// Undo a chat correction: put the row back exactly as it was before the fix.
+export async function undoFoodFix(
+  foodLogId: string,
+  previous: FoodSnapshot,
+  ref?: CardRef | null
+): Promise<SimpleResult> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: SIGNED_OUT };
+  const name = typeof previous?.name === "string" ? previous.name.trim().slice(0, 200) : "";
+  if (typeof foodLogId !== "string" || !foodLogId || !name) return { ok: false, error: "Nothing to undo." };
+  const { data, error } = await supabase
+    .from("food_logs")
+    .update({
+      name,
+      serving: typeof previous.serving === "string" ? previous.serving.slice(0, 100) : null,
+      kcal: nnum(previous.kcal),
+      protein_g: nnum(previous.protein_g),
+      carbs_g: nnum(previous.carbs_g),
+      fat_g: nnum(previous.fat_g),
+      is_estimate: previous.is_estimate !== false,
+    })
+    .eq("id", foodLogId)
+    .eq("user_id", user.id)
+    .select("id")
+    .maybeSingle();
+  if (error || !data) {
+    if (error) console.error(`[chat undo food fix] ${error.message}`);
+    return { ok: false, error: error ? "Couldn't undo that. Try again." : "That food is gone." };
   }
   await patchCard(supabase, user.id, ref, { status: "undone" });
   return { ok: true };

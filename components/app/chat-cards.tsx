@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   addPastFoods,
   saveFoodToLibrary,
+  undoFoodFix,
   undoFoodLogs,
   undoSleep,
   undoWeight,
@@ -187,6 +188,68 @@ function FoodCardView({ card, cref }: { card: Extract<ChatCard, { kind: "food" }
                 Undo
               </button>
             ) : null}
+          </div>
+        </>
+      ) : null}
+      <CardError error={error} />
+    </section>
+  );
+}
+
+function FixedFoodCardView({
+  card,
+  cref,
+}: {
+  card: Extract<ChatCard, { kind: "food_fixed" }>;
+  cref: CardRef | null;
+}) {
+  const [status, setStatus] = useState(card.status);
+  const [saved, setSaved] = useState(false);
+  const { busy, error, run } = useAction();
+  const prev = card.previous;
+  return (
+    <section aria-label={`Fixed ${card.item.name}`} className={CARD}>
+      <div className="flex items-center justify-between gap-2">
+        <span className={TITLE}>{status === "undone" ? "Fix undone" : "Fixed"}</span>
+        <span className={`mark ${card.item.is_estimate ? "mark-amber" : "mark-neutral"}`}>
+          {card.item.is_estimate ? "Updated · estimate" : "Your numbers"}
+        </span>
+      </div>
+      <div className={status === "undone" ? "opacity-50 line-through" : ""}>
+        <FoodRows items={[card.item]} />
+      </div>
+      <p className="tnum text-xs text-muted">
+        Was: {prev.name}
+        {prev.serving ? `, ${prev.serving}` : ""} · {prev.kcal != null ? fmtInt(prev.kcal) : "—"} kcal
+        {prev.protein_g != null ? ` · P${Math.round(prev.protein_g)}` : ""}
+      </p>
+      {status === "fixed" ? (
+        <>
+          <p className="tnum border-t border-hairline pt-1.5 text-xs text-muted">
+            Today <strong className="font-display text-ink">{fmtInt(card.kcal_today)}</strong> kcal ·{" "}
+            <strong className="font-display text-ink">{fmtInt(card.protein_today)}</strong> g protein
+          </p>
+          <div className="mt-0.5 flex flex-wrap gap-2">
+            {saved ? (
+              <span className="flex min-h-9 items-center text-xs font-bold text-green">Saved to library</span>
+            ) : (
+              <button
+                type="button"
+                disabled={busy}
+                className={BTN_PRIMARY}
+                onClick={() => run(() => saveFoodToLibrary(card.item.id), () => setSaved(true))}
+              >
+                Save to library
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={busy}
+              className={BTN_SECONDARY}
+              onClick={() => run(() => undoFoodFix(card.item.id, prev, cref), () => setStatus("undone"))}
+            >
+              Undo
+            </button>
           </div>
         </>
       ) : null}
@@ -519,6 +582,8 @@ export function ChatCards({
         switch (card.kind) {
           case "food":
             return <FoodCardView key={card.key} card={card} cref={cref} />;
+          case "food_fixed":
+            return <FixedFoodCardView key={card.key} card={card} cref={cref} />;
           case "food_past":
             return <PastFoodCardView key={card.key} card={card} cref={cref} today={today} />;
           case "weight":

@@ -17,6 +17,23 @@ export type ParsedFood = {
   carbs_g: number | null;
   fat_g: number | null;
   is_estimate: boolean;
+  // True when the user typed the numbers themselves ("160 kcal, 30 g protein").
+  // The action re-checks this against the message text before trusting it.
+  user_stated_numbers: boolean;
+};
+
+// A change to one of the recently logged foods (sent to the parser as RECENT
+// CONTEXT). Null fields = keep what's there. Updates that row; never a new one.
+export type ParsedCorrection = {
+  target_index: number; // 0 = most recent
+  name: string | null;
+  serving: string | null;
+  kcal: number | null;
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+  // True when the new numbers were typed by the user (false = scaled to a new amount).
+  user_stated_numbers: boolean;
 };
 
 export type ParsedSet = {
@@ -52,6 +69,7 @@ export type ParsedInput = {
   is_question: boolean;
   goal_change: ParsedGoalChange | null;
   health_update: ParsedHealthUpdate | null;
+  correction: ParsedCorrection | null;
   needs_clarification: string | null;
 };
 
@@ -75,6 +93,7 @@ export const PARSE_JSON_SCHEMA = {
           carbs_g: { type: ["number", "null"] },
           fat_g: { type: ["number", "null"] },
           is_estimate: { type: "boolean" },
+          user_stated_numbers: { type: "boolean" },
         },
         required: [
           "name",
@@ -85,6 +104,7 @@ export const PARSE_JSON_SCHEMA = {
           "carbs_g",
           "fat_g",
           "is_estimate",
+          "user_stated_numbers",
         ],
       },
     },
@@ -142,6 +162,21 @@ export const PARSE_JSON_SCHEMA = {
       },
       required: ["condition", "notes", "action"],
     },
+    correction: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      properties: {
+        target_index: { type: "integer" },
+        name: { type: ["string", "null"] },
+        serving: { type: ["string", "null"] },
+        kcal: { type: ["number", "null"] },
+        protein_g: { type: ["number", "null"] },
+        carbs_g: { type: ["number", "null"] },
+        fat_g: { type: ["number", "null"] },
+        user_stated_numbers: { type: "boolean" },
+      },
+      required: ["target_index", "name", "serving", "kcal", "protein_g", "carbs_g", "fat_g", "user_stated_numbers"],
+    },
     needs_clarification: { type: ["string", "null"] },
   },
   required: [
@@ -153,6 +188,7 @@ export const PARSE_JSON_SCHEMA = {
     "is_question",
     "goal_change",
     "health_update",
+    "correction",
     "needs_clarification",
   ],
 } as const;
@@ -166,6 +202,26 @@ function int(v: unknown): number | null {
 }
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
+}
+// Nutrition numbers can't be negative.
+function nonNeg(v: unknown): number | null {
+  const n = num(v);
+  return n !== null && n >= 0 ? n : null;
+}
+
+// The numbers typed in a message ("1,200 kcal", "325ml", "30g") — used to check
+// that a "user stated" number really was typed, not estimated.
+export function numbersInText(text: string): number[] {
+  const out: number[] = [];
+  for (const m of text.replace(/(\d),(?=\d{3}\b)/g, "$1").match(/\d+(?:\.\d+)?/g) ?? []) {
+    const n = Number(m);
+    if (Number.isFinite(n)) out.push(n);
+  }
+  return out;
+}
+
+export function appearsIn(value: number | null, typed: number[]): boolean {
+  return value != null && typed.some((n) => Math.abs(n - value) < 0.05);
 }
 
 // Defensive normalizer over the AI output. Returns a clean ParsedInput; the
@@ -183,15 +239,20 @@ export function normalizeParse(input: unknown): ParsedInput {
           const name = str(f.name);
           if (!name) return null;
           const meal = str(f.meal);
+          const kcal = nonNeg(f.kcal);
+          const protein_g = nonNeg(f.protein_g);
+          // "Stated" only counts when there is a stated calorie or protein number.
+          const stated = f.user_stated_numbers === true && (kcal !== null || protein_g !== null);
           return {
             name,
             serving: str(f.serving),
             meal: meal && MEALS.includes(meal as (typeof MEALS)[number]) ? meal : null,
-            kcal: num(f.kcal),
-            protein_g: num(f.protein_g),
-            carbs_g: num(f.carbs_g),
-            fat_g: num(f.fat_g),
-            is_estimate: f.is_estimate !== false,
+            kcal,
+            protein_g,
+            carbs_g: nonNeg(f.carbs_g),
+            fat_g: nonNeg(f.fat_g),
+            is_estimate: stated ? false : f.is_estimate !== false,
+            user_stated_numbers: stated,
           } satisfies ParsedFood;
         })
         .filter((f): f is ParsedFood => f !== null)
@@ -254,6 +315,24 @@ export function normalizeParse(input: unknown): ParsedInput {
       };
   }
 
+  let correction: ParsedCorrection | null = null;
+  if (root.correction && typeof root.correction === "object") {
+    const c = root.correction as Record<string, unknown>;
+    const idx = int(c.target_index);
+    const fields = {
+      name: str(c.name)?.slice(0, 200) ?? null,
+      serving: str(c.serving)?.slice(0, 100) ?? null,
+      kcal: nonNeg(c.kcal),
+      protein_g: nonNeg(c.protein_g),
+      carbs_g: nonNeg(c.carbs_g),
+      fat_g: nonNeg(c.fat_g),
+      user_stated_numbers: c.user_stated_numbers === true,
+    };
+    // Kept even when nothing changes (the action then asks what to change).
+    // An unreadable index becomes -1 so the action asks which item, never guesses.
+    correction = { target_index: idx !== null && idx >= 0 && idx <= 9 ? idx : -1, ...fields };
+  }
+
   const logDate = str(root.log_date);
   return {
     foods,
@@ -270,6 +349,7 @@ export function normalizeParse(input: unknown): ParsedInput {
     is_question: root.is_question === true,
     goal_change,
     health_update,
+    correction,
     needs_clarification: str(root.needs_clarification),
   };
 }

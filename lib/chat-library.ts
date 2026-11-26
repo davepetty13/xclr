@@ -19,6 +19,18 @@ export type CardFood = {
   fat_g: number | null;
   is_estimate: boolean;
   library_id?: string | null;
+  user_stated?: boolean; // the user typed these numbers → they beat the library and any estimate
+};
+
+// The row's values before a chat correction (restored by Undo).
+export type FoodSnapshot = {
+  name: string;
+  serving: string | null;
+  kcal: number | null;
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+  is_estimate: boolean;
 };
 
 export type ChatCard =
@@ -31,6 +43,15 @@ export type ChatCard =
       kcal_today: number;
       protein_today: number;
       status: "logged" | "undone";
+    }
+  | {
+      key: string;
+      kind: "food_fixed";
+      item: CardFood & { id: string }; // the corrected food_logs row, new values
+      previous: FoodSnapshot;
+      kcal_today: number;
+      protein_today: number;
+      status: "fixed" | "undone";
     }
   | {
       key: string;
@@ -278,6 +299,14 @@ export function loggedFoodsLine(
 ): string {
   const head = meal ? `Logged ${MEAL_LABEL[meal] ?? meal}: ` : "Logged: ";
   return `${head}${names.join(", ")}. Today ${fmtInt(kcalToday)} kcal · ${fmtInt(proteinToday)} g protein.`;
+}
+
+// "Fixed: Premier Protein shake, 325 ml — 160 kcal · 30 g protein. Today 710 kcal · 60 g protein."
+export function fixedFoodLine(f: CardFood, kcalToday: number, proteinToday: number): string {
+  const nums: string[] = [];
+  if (f.kcal != null) nums.push(`${fmtInt(f.kcal)} kcal`);
+  if (f.protein_g != null) nums.push(`${fmtInt(f.protein_g)} g protein`);
+  return `Fixed: ${f.name}${f.serving ? `, ${f.serving}` : ""}${nums.length ? ` — ${nums.join(" · ")}` : ""}. Today ${fmtInt(kcalToday)} kcal · ${fmtInt(proteinToday)} g protein.`;
 }
 
 export function mealLabel(meal: string | null): string | null {
