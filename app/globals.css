@@ -29,12 +29,15 @@
   --amber-text: #8a5a00; /* "estimate" / "hold" marks */
   --violet: #7c6bd6; /* protein bar / fat / sleep / health */
 
-  /* dark band (ONE per screen: the first row of numbers) */
-  --band-text: #ffffff;
-  --band-secondary: #c9d2cc;
-  --band-label: #a9b5ad;
-  --band-hairline: rgba(255, 255, 255, 0.09);
-  --band-track: rgba(255, 255, 255, 0.12);
+  /* top band (ONE per screen: the first row of numbers). v3.6: very light
+     frosted grey instead of the dark MERS-style band, so Xclr has its own look. */
+  --band-text: #16211b;
+  --band-secondary: #4e5a52;
+  --band-label: #5a655d;
+  --band-hairline: rgba(22, 33, 27, 0.09);
+  --band-track: rgba(22, 33, 27, 0.1);
+  --green-on-dark: #1e7a4d; /* progress bar / good numbers inside the band */
+  --ember-on-dark: #c24e2a; /* burn / PR numbers inside the band */
 
   /* shape */
   --radius-card: 24px;
@@ -74,15 +77,15 @@ body {
     box-shadow: var(--shadow-card);
   }
 
-  /* The one dark band per screen. Put the glow child <span class="band-glow" aria-hidden> inside. */
+  /* The one top band per screen (light frosted grey since v3.6). */
   .band {
     position: relative;
     overflow: hidden;
     color: var(--band-text);
     border-radius: var(--radius-band);
-    background: radial-gradient(130% 150% at 0% 0%, #2e4237 0, #1a2720 42%, #0f1712 100%);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 2px 4px rgba(16, 24, 19, 0.2),
-      0 30px 50px -28px rgba(16, 24, 19, 0.6);
+    background: linear-gradient(180deg, rgba(244, 245, 243, 0.97), rgba(231, 233, 230, 0.92));
+    box-shadow: inset 0 1px 0 #ffffff, inset 0 0 0 1px rgba(255, 255, 255, 0.7),
+      0 1px 2px rgba(22, 33, 27, 0.06), 0 24px 50px -26px rgba(22, 33, 27, 0.3);
   }
   .band::before {
     content: "";
@@ -91,7 +94,7 @@ body {
     bottom: -150px;
     width: 380px;
     height: 280px;
-    background: radial-gradient(closest-side, rgba(224, 96, 58, 0.42), transparent);
+    background: radial-gradient(closest-side, rgba(30, 122, 77, 0.12), transparent);
     pointer-events: none;
   }
   .band > * {
