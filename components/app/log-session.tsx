@@ -38,6 +38,10 @@ export function LogSession({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which exercise has the logging UI open, and which set row is being edited.
+  // Both are part of the draft, so coming back to Train reopens where you were.
+  const [active, setActive] = useState(0);
+  const [editing, setEditing] = useState<number | null>(null);
 
   // Draft survives a mobile reload / tab switch until the session is submitted.
   const draftKey = `xclr-draft-workout-${userId}-${dayId}`;
@@ -47,9 +51,19 @@ export function LogSession({
     try {
       const raw = localStorage.getItem(draftKey);
       if (raw) {
-        const d = JSON.parse(raw) as { cells?: Record<string, Cell>; note?: string };
+        const d = JSON.parse(raw) as {
+          cells?: Record<string, Cell>;
+          note?: string;
+          active?: number;
+          editing?: number | null;
+        };
         if (d.cells) setCells(d.cells);
-        if (typeof d.note === "string") setNote(d.note);
+        if (typeof d.note === "string") {
+          setNote(d.note);
+          if (d.note.trim()) setNoteOpen(true);
+        }
+        if (typeof d.active === "number" && d.active >= 0 && d.active < exercises.length) setActive(d.active);
+        if (typeof d.editing === "number" || d.editing === null) setEditing(d.editing ?? null);
       }
     } catch {
       // ignore a malformed draft
@@ -65,11 +79,11 @@ export function LogSession({
       return;
     }
     try {
-      localStorage.setItem(draftKey, JSON.stringify({ cells, note }));
+      localStorage.setItem(draftKey, JSON.stringify({ cells, note, active, editing }));
     } catch {
       // storage unavailable/full — non-fatal
     }
-  }, [draftKey, cells, note]);
+  }, [draftKey, cells, note, active, editing]);
 
   const key = (peId: string, i: number) => `${peId}:${i}`;
   const get = (peId: string, i: number, suggested: number | null): Cell =>
@@ -127,10 +141,6 @@ export function LogSession({
       setError(r.error);
     }
   }
-
-  // Which exercise has the logging UI open, and which set row is being edited.
-  const [active, setActive] = useState(0);
-  const [editing, setEditing] = useState<number | null>(null);
 
   if (done) {
     return (

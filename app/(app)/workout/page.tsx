@@ -6,6 +6,7 @@ import { LogSession, type LogExercise } from "@/components/app/log-session";
 import type { LoadType } from "@/lib/program-schema";
 import { SkipDay } from "./skip-day";
 import { DayPicker } from "./day-picker";
+import { UnsavedDrafts } from "./unsaved-drafts";
 import { NewWeek } from "./new-week";
 import { getCurrentUser } from "@/lib/session";
 
@@ -144,6 +145,12 @@ export default async function WorkoutTodayPage({
       ) : null}
 
       <NewWeek week={status.week} weekComplete={status.weekComplete} weekEnded={status.weekEnded} />
+
+      <UnsavedDrafts
+        userId={user.id}
+        currentDayId={day.id}
+        days={dayList.map((d) => ({ id: d.id, name: `Day ${d.day_index}${d.label ? ` · ${d.label}` : ""}` }))}
+      />
 
       {/* Day selector: compact dropdown + status beside it */}
       <DayPicker
