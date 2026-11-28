@@ -77,7 +77,7 @@ function loaders(c: Ctx) {
       once("profile", async () => {
         const { data } = await c.admin
           .from("profiles")
-          .select("daily_calorie_target, daily_protein_target, preferred_days")
+          .select("daily_calorie_target, daily_protein_target, preferred_days, daily_step_target")
           .eq("id", c.userId)
           .maybeSingle();
         return data as Record<string, unknown> | null;
@@ -377,6 +377,65 @@ async function nudges(c: Ctx, l: L, out: Candidate[]) {
   }
 }
 
+// Watch & activity — only for users with Watch & phone sync set up. Data comes
+// from health_daily (what the sync saved today); nothing is ever guessed.
+async function watchReminders(c: Ctx, l: L, out: Candidate[]) {
+  const p = c.prefs;
+  const wantSteps = p.steps_on && due(p.steps_time, c.now);
+  const wantSleep = p.sleep_on && c.now >= 5 * 60 && c.now < 12 * 60;
+  const wantSync = p.sync_check_on && due(p.sync_check_time, c.now);
+  if (!wantSteps && !wantSleep && !wantSync) return;
+
+  const { data: tok } = await c.admin.from("health_sync_tokens").select("user_id").eq("user_id", c.userId).maybeSingle();
+  if (!tok) return; // sync not set up
+  const { data: day } = await c.admin
+    .from("health_daily")
+    .select("steps, sleep_minutes")
+    .eq("user_id", c.userId)
+    .eq("local_date", c.today)
+    .maybeSingle();
+
+  if (wantSync && !day) {
+    out.push({
+      kind: "sync_missing",
+      title: "Watch hasn't synced today",
+      body: "Xclr didn't get today's Watch data. Unlock your phone and tap Xclr Sync.",
+      url: "/profile/health-sync",
+      dedupe_key: `sync_missing:${c.today}`,
+    });
+  }
+
+  if (wantSteps && day && typeof day.steps === "number") {
+    const target = Number((await l.profile())?.daily_step_target) || 8000;
+    if (day.steps < target / 2) {
+      out.push({
+        kind: "steps_low",
+        title: "Steps are low today",
+        body: `${fmt(day.steps)} of ${fmt(target)} steps so far. A 20-minute walk after dinner closes most of it.`,
+        url: "/",
+        dedupe_key: `steps_low:${c.today}`,
+      });
+    }
+  }
+
+  if (wantSleep && day && typeof day.sleep_minutes === "number" && day.sleep_minutes > 0 && day.sleep_minutes < 360) {
+    const h = Math.floor(day.sleep_minutes / 60);
+    const m = day.sleep_minutes % 60;
+    const status = await l.week();
+    const trainsToday = status?.nextDay && !status.weekComplete && (await l.sessionsToday()) === 0;
+    const name = trainsToday && status?.nextDay ? `Day ${status.nextDay.day_index}${status.nextDay.label ? ` · ${status.nextDay.label}` : ""}` : null;
+    out.push({
+      kind: "sleep_short",
+      title: "Short night",
+      body: name
+        ? `You slept ${h}h ${m}m last night. Keep today's ${name} on the lighter side — fewer sets is fine.`
+        : `You slept ${h}h ${m}m last night. Go easy on hard training today.`,
+      url: "/workout",
+      dedupe_key: `sleep_short:${c.today}`,
+    });
+  }
+}
+
 export async function evaluateUser(admin: Supa, userId: string, prefsRow: Record<string, unknown>, tzRaw: string | null) {
   const tz = tzRaw || DEFAULT_TZ;
   const at = new Date();
@@ -398,6 +457,7 @@ export async function evaluateUser(admin: Supa, userId: string, prefsRow: Record
   await calorieReminders(c, l, out);
   await reviewReminder(c, out);
   await nudges(c, l, out);
+  await watchReminders(c, l, out);
   if (!out.length) return { created: 0, pushed: 0 };
 
   // Insert once per dedupe_key; only rows that are new come back.

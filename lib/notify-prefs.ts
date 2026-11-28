@@ -17,6 +17,11 @@ export type NotifyPrefs = {
   calories_time: string;
   review_on: boolean;
   nudges_on: boolean;
+  steps_on: boolean; // Watch & activity (needs Watch & phone sync)
+  steps_time: string;
+  sleep_on: boolean;
+  sync_check_on: boolean;
+  sync_check_time: string;
   quiet_start: string | null; // null = no quiet hours
   quiet_end: string | null;
 };
@@ -37,6 +42,11 @@ export const DEFAULT_PREFS: NotifyPrefs = {
   calories_time: "20:00",
   review_on: true,
   nudges_on: true,
+  steps_on: true,
+  steps_time: "18:30",
+  sleep_on: true,
+  sync_check_on: true,
+  sync_check_time: "22:00",
   quiet_start: "22:00",
   quiet_end: "06:00",
 };
@@ -51,6 +61,9 @@ export const BOOL_KEYS = [
   "calories_on",
   "review_on",
   "nudges_on",
+  "steps_on",
+  "sleep_on",
+  "sync_check_on",
 ] as const;
 export const TIME_KEYS = [
   "breakfast_time",
@@ -59,6 +72,8 @@ export const TIME_KEYS = [
   "session_time",
   "workout_reminder_time",
   "calories_time",
+  "steps_time",
+  "sync_check_time",
 ] as const;
 
 // "10:00:00" (Postgres time) or "10:00" → "10:00"; anything else → null.
@@ -139,7 +154,7 @@ export function inQuietHours(p: Pick<NotifyPrefs, "quiet_start" | "quiet_end">, 
 
 // Inbox tabs.
 export const MEAL_KINDS = new Set(["meal_breakfast", "meal_lunch", "meal_dinner", "protein", "calories_low", "calories_high"]);
-export const TRAINING_KINDS = new Set(["session", "workout_missing", "review", "weigh_in"]);
+export const TRAINING_KINDS = new Set(["session", "workout_missing", "review", "weigh_in", "steps_low", "sleep_short", "sync_missing"]);
 
 // Which logged meals count as "breakfast / lunch / dinner is logged".
 export const MEAL_COUNTS: Record<"breakfast" | "lunch" | "dinner", readonly string[]> = {

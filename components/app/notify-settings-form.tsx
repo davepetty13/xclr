@@ -10,8 +10,27 @@ import {
 import { QUIET_OPTIONS, TIME_OPTIONS, quietValue, type NotifyPrefs } from "@/lib/notify-prefs";
 import { Switch } from "@/components/app/switch";
 
-type BoolKey = "breakfast_on" | "lunch_on" | "dinner_on" | "calories_on" | "session_on" | "workout_reminder_on" | "review_on" | "nudges_on";
-type TimeKey = "breakfast_time" | "lunch_time" | "dinner_time" | "calories_time" | "session_time" | "workout_reminder_time";
+type BoolKey =
+  | "breakfast_on"
+  | "lunch_on"
+  | "dinner_on"
+  | "calories_on"
+  | "session_on"
+  | "workout_reminder_on"
+  | "review_on"
+  | "nudges_on"
+  | "steps_on"
+  | "sleep_on"
+  | "sync_check_on";
+type TimeKey =
+  | "breakfast_time"
+  | "lunch_time"
+  | "dinner_time"
+  | "calories_time"
+  | "session_time"
+  | "workout_reminder_time"
+  | "steps_time"
+  | "sync_check_time";
 
 const FOOD_ROWS: { on: BoolKey; time?: TimeKey; title: string; hint?: string }[] = [
   { on: "breakfast_on", time: "breakfast_time", title: "Breakfast not logged", hint: "Only if nothing's logged by then" },
@@ -24,6 +43,11 @@ const TRAIN_ROWS: { on: BoolKey; time?: TimeKey; title: string; hint?: string }[
   { on: "workout_reminder_on", time: "workout_reminder_time", title: "No workout logged yet", hint: "Training days only · tap Skip day if needed" },
   { on: "review_on", title: "Weekly review ready", hint: "When it's waiting for you" },
   { on: "nudges_on", title: "Nudges", hint: "Weigh-in, protein short, photo deleting" },
+];
+const WATCH_ROWS: { on: BoolKey; time?: TimeKey; title: string; hint?: string }[] = [
+  { on: "steps_on", time: "steps_time", title: "Low steps", hint: "Under half your step goal" },
+  { on: "sleep_on", title: "Short sleep", hint: "Under 6 h last night · training advice only" },
+  { on: "sync_check_on", time: "sync_check_time", title: "Watch hasn't synced", hint: "Nothing from your Watch today" },
 ];
 
 function urlBase64ToUint8Array(base64: string): Uint8Array {
@@ -250,6 +274,16 @@ export function NotifySettingsForm({
           Training &amp; coach
         </h2>
         {TRAIN_ROWS.map((r, i) => row(r, i === TRAIN_ROWS.length - 1))}
+      </section>
+
+      <section aria-labelledby="watch-h" className="glass px-3.5 py-1">
+        <h2 id="watch-h" className="pt-2.5 text-xs font-bold text-muted">
+          Watch &amp; activity
+        </h2>
+        {WATCH_ROWS.map((r, i) => row(r, i === WATCH_ROWS.length - 1))}
+        <p className="pb-2.5 text-[11px] text-muted">
+          These need Watch &amp; phone sync. Each goes out once a day at most, and only if it&apos;s still true.
+        </p>
       </section>
 
       <label className="flex items-center gap-2 px-1 text-[13px] font-semibold text-muted">
