@@ -37,6 +37,8 @@ export type ReviewContext = {
   activities?: { name: string; minutes: number | null; effort: string | null; kcal: number | null }[]; // extra activities
   avg_sleep_min: number | null;
   weight_trend: string; // short human string
+  // Daily averages from Apple Health / Health Connect, when synced.
+  activity?: { days: number; avg_steps: number | null; avg_active_kcal: number | null; avg_sleep_min: number | null } | null;
 };
 
 // User-written text (notes, skip reasons) stays on one line, unquoted-safe.
@@ -100,6 +102,19 @@ export function buildReviewUserMessage(ctx: ReviewContext): string {
     }`,
     `Average sleep: ${ctx.avg_sleep_min != null ? `${Math.round(ctx.avg_sleep_min / 60)}h` : "unknown"}`,
     `Weight trend: ${ctx.weight_trend}`,
+    ...(ctx.activity
+      ? [
+          `Watch / phone daily averages (${ctx.activity.days} day${ctx.activity.days === 1 ? "" : "s"} synced): ${[
+            ctx.activity.avg_steps != null ? `${ctx.activity.avg_steps} steps` : null,
+            ctx.activity.avg_active_kcal != null ? `${ctx.activity.avg_active_kcal} kcal active burn` : null,
+            ctx.activity.avg_sleep_min != null
+              ? `${Math.floor(ctx.activity.avg_sleep_min / 60)}h ${ctx.activity.avg_sleep_min % 60}m sleep`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(", ")}`,
+        ]
+      : []),
     "",
     "Propose adjustments per the rules. Reference exercises by [ref]. Hold anything that isn't clearly ready to progress."
   );

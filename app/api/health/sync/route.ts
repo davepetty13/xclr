@@ -1,0 +1,141 @@
+import { createHash } from "crypto";
+import { NextResponse } from "next/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { DEFAULT_TZ, todayLocal } from "@/lib/time";
+import { LIMITS, parseSyncBody, readHealthFields } from "@/lib/health";
+
+// Apple Health / Health Connect sync. An iPhone Shortcut (or any Android app
+// that can send a web request) POSTs JSON here with
+// `Authorization: Bearer <sync token>`. Safe to call many times a day: days
+// upsert by date, workouts dedupe by id (or start time + kind).
+//
+// Public path (see middleware.ts): no session cookie, the token is the auth.
+// Only the token's SHA-256 hash is stored. Never log the token or any value.
+export const dynamic = "force-dynamic";
+export const maxDuration = 30;
+
+const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/; // 32 random bytes, base64url
+const SMALL_BODY = 4 * 1024;
+
+function json(status: number, body: Record<string, unknown>) {
+  return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
+}
+
+export async function POST(request: Request) {
+  const header = request.headers.get("authorization") ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  if (!TOKEN_RE.test(token)) return json(401, { ok: false, error: "Missing or bad sync link." });
+
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (declared > LIMITS.bodyBytes) return json(413, { ok: false, error: "Too much data in one sync." });
+  let raw: string;
+  try {
+    raw = await request.text();
+  } catch {
+    return json(400, { ok: false, error: "Couldn't read the request." });
+  }
+  if (Buffer.byteLength(raw, "utf8") > LIMITS.bodyBytes)
+    return json(413, { ok: false, error: "Too much data in one sync." });
+
+  let admin;
+  try {
+    admin = createAdminClient();
+  } catch {
+    return json(503, { ok: false, error: "Sync isn't set up on the server yet." });
+  }
+
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  const { data: tok } = await admin
+    .from("health_sync_tokens")
+    .select("user_id, last_used_at, sync_day, sync_count_today")
+    .eq("token_hash", tokenHash)
+    .maybeSingle();
+  if (!tok) return json(401, { ok: false, error: "This sync link isn't valid any more. Make a new one in Xclr." });
+  const userId = tok.user_id as string;
+
+  // Rate limit per link: small one-day syncs every 10 s at most, bigger
+  // back-fills once a minute.
+  const lastMs = tok.last_used_at ? Date.parse(tok.last_used_at as string) : 0;
+  const gap = Buffer.byteLength(raw, "utf8") <= SMALL_BODY ? 10_000 : 60_000;
+  if (lastMs && Date.now() - lastMs < gap)
+    return json(429, { ok: false, error: "Synced a moment ago. Try again in a minute." });
+
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return json(400, { ok: false, error: "The body must be JSON." });
+  }
+
+  const { data: profile } = await admin
+    .from("profiles")
+    .select("timezone, health_sync_fields")
+    .eq("id", userId)
+    .maybeSingle();
+  const tz = (profile?.timezone as string | null) ?? DEFAULT_TZ;
+  const today = todayLocal(tz);
+  const fields = readHealthFields(profile?.health_sync_fields);
+
+  const parsed = parseSyncBody(body, today);
+  if (!parsed.ok) return json(400, { ok: false, error: parsed.error });
+  const { source, days, workouts } = parsed.payload;
+  const now = new Date().toISOString();
+
+  // Days: one upsert per date with only the fields sent AND switched on, so a
+  // partial sync never blanks a number an earlier sync saved.
+  let daysSaved = 0;
+  for (const d of days) {
+    const row: Record<string, unknown> = { user_id: userId, local_date: d.date, source, updated_at: now };
+    if (fields.steps && d.steps !== undefined) row.steps = d.steps;
+    if (fields.active && d.active_kcal !== undefined) row.active_kcal = d.active_kcal;
+    if (fields.resting_hr && d.resting_hr !== undefined) row.resting_hr = d.resting_hr;
+    if (fields.sleep && d.sleep_minutes !== undefined) row.sleep_minutes = d.sleep_minutes;
+    if (fields.weight && d.weight_kg !== undefined) row.weight_kg = d.weight_kg;
+    if (Object.keys(row).length <= 4) continue; // nothing accepted for this day
+    const { error } = await admin.from("health_daily").upsert(row, { onConflict: "user_id,local_date" });
+    if (error) return json(500, { ok: false, error: "Couldn't save that day. Try again." });
+    daysSaved++;
+
+    // Weight also goes into the weight log, without doubling up: add it when the
+    // day has no weigh-in, update it only if the day's entry came from a sync.
+    if (fields.weight && d.weight_kg !== undefined) {
+      const { data: w } = await admin
+        .from("weights")
+        .select("id, kg, source")
+        .eq("user_id", userId)
+        .eq("measured_on", d.date)
+        .maybeSingle();
+      if (!w) {
+        await admin
+          .from("weights")
+          .insert({ user_id: userId, measured_on: d.date, kg: d.weight_kg, source });
+      } else if (
+        (w.source === "apple_health" || w.source === "health_connect" || w.source === "other") &&
+        Math.abs(Number(w.kg) - d.weight_kg) >= 0.01
+      ) {
+        await admin.from("weights").update({ kg: d.weight_kg, source }).eq("id", w.id).eq("user_id", userId);
+      }
+    }
+  }
+
+  let workoutsSaved = 0;
+  if (fields.workouts && workouts.length) {
+    const rows = workouts.map((w) => ({ user_id: userId, source, ...w }));
+    const { error } = await admin.from("health_workouts").upsert(rows, { onConflict: "user_id,external_id" });
+    if (error) return json(500, { ok: false, error: "Couldn't save the workouts. Try again." });
+    workoutsSaved = rows.length;
+  }
+
+  const count = tok.sync_day === today ? (Number(tok.sync_count_today) || 0) + 1 : 1;
+  await admin
+    .from("health_sync_tokens")
+    .update({ last_used_at: now, sync_day: today, sync_count_today: count })
+    .eq("user_id", userId)
+    .eq("token_hash", tokenHash);
+
+  return json(200, { ok: true, days: daysSaved, workouts: workoutsSaved, syncs_today: count });
+}
+
+export function GET() {
+  return json(405, { ok: false, error: "Send a POST with JSON." });
+}

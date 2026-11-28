@@ -5,6 +5,7 @@ import { formatLoad, type LoadType } from "@/lib/program-schema";
 import { getCurrentUser } from "@/lib/session";
 import { loadShareContext, sessionShare } from "@/lib/share-data";
 import { ShareButton } from "@/components/app/share-sheet";
+import { WatchWorkouts } from "@/components/app/watch-workouts";
 
 export default async function WorkoutHistoryPage() {
   const supabase = createClient();
@@ -87,13 +88,17 @@ export default async function WorkoutHistoryPage() {
 
   if (!sessionList.length)
     return (
-      <p className="glass p-4 text-sm font-medium text-muted">
-        No sessions yet. Log one from Today and it shows up here.
-      </p>
+      <div className="space-y-3">
+        <p className="glass p-4 text-sm font-medium text-muted">
+          No sessions yet. Log one from Today and it shows up here.
+        </p>
+        <WatchWorkouts userId={user.id} tz={tz} />
+      </div>
     );
 
   return (
     <div className="space-y-3">
+      <WatchWorkouts userId={user.id} tz={tz} />
       {sessionList.map((sess) => {
         const sets = bySession.get(sess.id as string) ?? [];
         // Volume counts real external load only: total kg, and per-side kg × 2.

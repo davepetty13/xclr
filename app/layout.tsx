@@ -21,6 +21,8 @@ const hanken = Hanken_Grotesk({
 export const metadata: Metadata = {
   title: "Xclr",
   description: "Personal health & wellness with an AI coach at its core.",
+  // Home Screen web app (needed for iPhone notifications, iOS 16.4+).
+  appleWebApp: { capable: true, title: "Xclr", statusBarStyle: "default" },
 };
 
 export default function RootLayout({

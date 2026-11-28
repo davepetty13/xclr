@@ -8,6 +8,9 @@ import { WeightSparkline } from "@/components/app/weight-sparkline";
 import { QuickLog, type QuickLogItem } from "@/components/app/quick-log";
 import { MEALS } from "@/lib/parse-schema";
 import { getCurrentUser } from "@/lib/session";
+import { NotifyBell } from "@/components/app/notify-bell";
+import { loadInbox } from "@/lib/inbox";
+import { fmtSleep, toHealthDay } from "@/lib/health";
 
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 
@@ -41,11 +44,14 @@ export default async function TodayPage() {
     { data: todayFoods, error: foodsError },
     { data: weightRows, error: weightError },
     { data: libRows },
+    { data: healthRow },
+    { data: watchRows },
+    inbox,
   ] =
     await Promise.all([
       supabase
         .from("profiles")
-        .select("display_name, primary_goal, daily_calorie_target, daily_protein_target, weight_unit")
+        .select("display_name, primary_goal, daily_calorie_target, daily_protein_target, daily_step_target, weight_unit")
         .eq("id", user.id)
         .single(),
       getWeekStatus(supabase, user.id, tz),
@@ -67,6 +73,21 @@ export default async function TodayPage() {
         .eq("user_id", user.id)
         .order("times_logged", { ascending: false })
         .limit(3),
+      // Apple Health / Health Connect: today's totals + today's Watch workouts.
+      supabase
+        .from("health_daily")
+        .select("local_date, steps, active_kcal, resting_hr, sleep_minutes, weight_kg, updated_at")
+        .eq("user_id", user.id)
+        .eq("local_date", today)
+        .maybeSingle(),
+      supabase
+        .from("health_workouts")
+        .select("kind, minutes, kcal, avg_hr")
+        .eq("user_id", user.id)
+        .gte("started_at", localDayStartISO(today, tz))
+        .order("started_at", { ascending: false })
+        .limit(1),
+      loadInbox(supabase, user.id, tz, today),
     ]);
 
   const unit = profile?.weight_unit === "lbs" ? "lbs" : "kg";
@@ -111,12 +132,39 @@ export default async function TodayPage() {
       .gte("slept_on", sleepFrom)
       .lte("slept_on", today),
   ]);
-  const sleepVals = (sleepRows ?? [])
+  let sleepVals = (sleepRows ?? [])
     .map((s) => Number(s.duration_min))
     .filter((n) => Number.isFinite(n) && n > 0);
+  // No sleep logged by hand → use what the Watch saved, if anything.
+  if (!sleepVals.length) {
+    const { data: hs } = await supabase
+      .from("health_daily")
+      .select("sleep_minutes")
+      .eq("user_id", user.id)
+      .gte("local_date", sleepFrom)
+      .lte("local_date", today);
+    sleepVals = (hs ?? []).map((r) => Number(r.sleep_minutes)).filter((n) => Number.isFinite(n) && n > 0);
+  }
   const avgSleepMin = sleepVals.length
     ? Math.round(sleepVals.reduce((a, b) => a + b, 0) / sleepVals.length)
     : null;
+
+  // Watch / phone data for today. Only real numbers: each tile hides without data.
+  const health = healthRow ? toHealthDay(healthRow as Record<string, unknown>) : null;
+  const burned = health?.active_kcal ?? null;
+  const stepTarget = Number(profile?.daily_step_target) || 8000;
+  const watch = (watchRows ?? [])[0] as
+    | { kind: string; minutes: number | null; kcal: number | null; avg_hr: number | null }
+    | undefined;
+  const hasActivity =
+    !!watch ||
+    (health != null &&
+      (health.steps != null || health.active_kcal != null || health.sleep_minutes != null || health.resting_hr != null));
+  const syncedAt = health?.updated_at
+    ? new Date(health.updated_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: tz })
+    : null;
+  const stepPct = health?.steps != null ? Math.min(1, health.steps / stepTarget) : 0;
+  const RING = 2 * Math.PI * 31;
 
   const quickItems: QuickLogItem[] = (libRows ?? []).map((r) => ({
     id: r.id as string,
@@ -151,12 +199,15 @@ export default async function TodayPage() {
             {greeting}, {firstName}
           </h1>
         </div>
-        {status ? (
-          <span className="mark mark-neutral mt-1 shrink-0">
-            Week {status.week}
-            {next ? ` · Day ${next.day_index}` : ""}
-          </span>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {status ? (
+            <span className="mark mark-neutral">
+              Week {status.week}
+              {next ? ` · Day ${next.day_index}` : ""}
+            </span>
+          ) : null}
+          <NotifyBell items={inbox} />
+        </div>
       </header>
 
       {/* The one dark band: calories left today */}
@@ -187,12 +238,25 @@ export default async function TodayPage() {
             <div className="h-full rounded-full bg-green-on-dark" style={{ width: `${eatenPct}%` }} />
           </div>
         </div>
-        {/* No real burn source yet, so no Burned tile — never a made-up number. */}
+        {/* Burned shows only when the Watch sent active calories today — never a
+            made-up number. Calories left stays target − eaten (burn isn't eaten back). */}
         <dl className="grid grid-cols-3 border-t border-band-hairline">
           <div className="px-[18px] py-2.5">
             <dt className="text-[11px] text-band-label">Eaten</dt>
             <dd className="tnum font-display text-[19px] font-bold">{fmt(kcalEaten)}</dd>
           </div>
+          {burned != null ? (
+            <div className="border-l border-band-hairline px-3.5 py-2.5">
+              <dt className="flex items-center gap-1 text-[11px] text-band-label">
+                Burned
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} role="img" aria-label="from your Watch">
+                  <rect x="6" y="5" width="12" height="14" rx="3" />
+                  <path d="M9 5V2h6v3M9 19v3h6v-3" />
+                </svg>
+              </dt>
+              <dd className="tnum font-display text-[19px] font-bold text-ember-on-dark">{fmt(burned)}</dd>
+            </div>
+          ) : null}
           <div className="border-l border-band-hairline px-3.5 py-2.5">
             <dt className="text-[11px] text-band-label">Protein</dt>
             <dd className="tnum font-display text-[19px] font-bold">
@@ -200,12 +264,108 @@ export default async function TodayPage() {
               <span className="text-xs text-band-secondary"> / {proTarget} g</span>
             </dd>
           </div>
-          <div className="border-l border-band-hairline px-3.5 py-2.5">
-            <dt className="text-[11px] text-band-label">Target</dt>
-            <dd className="tnum font-display text-[19px] font-bold">{fmt(calTarget)}</dd>
-          </div>
+          {burned == null ? (
+            <div className="border-l border-band-hairline px-3.5 py-2.5">
+              <dt className="text-[11px] text-band-label">Target</dt>
+              <dd className="tnum font-display text-[19px] font-bold">{fmt(calTarget)}</dd>
+            </div>
+          ) : null}
         </dl>
       </section>
+
+      {hasActivity ? (
+        <section aria-labelledby="activity-h" className="glass flex flex-col gap-2.5 px-4 py-3.5">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 id="activity-h" className="text-sm font-bold text-ink">
+              Activity
+            </h2>
+            {syncedAt ? <span className="text-[11px] text-muted">Synced {syncedAt}</span> : null}
+          </div>
+          {health ? (
+            <div className={`grid items-center gap-3.5 ${health.steps != null ? "grid-cols-[auto_1fr]" : "grid-cols-1"}`}>
+              {health.steps != null ? (
+                <svg width="74" height="74" viewBox="0 0 74 74" role="img" aria-label={`Steps ${fmt(health.steps)} of ${fmt(stepTarget)}`}>
+                  <circle cx="37" cy="37" r="31" fill="none" stroke="var(--hairline)" strokeWidth="8" />
+                  <circle
+                    cx="37"
+                    cy="37"
+                    r="31"
+                    fill="none"
+                    stroke="var(--green)"
+                    strokeWidth="8"
+                    strokeLinecap="round"
+                    strokeDasharray={`${(stepPct * RING).toFixed(1)} ${RING.toFixed(1)}`}
+                    transform="rotate(-90 37 37)"
+                  />
+                </svg>
+              ) : null}
+              <dl className="grid grid-cols-2 gap-x-2.5 gap-y-2">
+                {health.steps != null ? (
+                  <div>
+                    <dt className="text-[11px] text-muted">Steps</dt>
+                    <dd className="tnum font-display text-[17px] font-bold text-ink">
+                      {fmt(health.steps)}
+                      <span className={`text-[11px] ${health.steps >= stepTarget ? "text-green" : "text-muted"}`}>
+                        {health.steps >= stepTarget ? " ✓ " : " / "}
+                        {stepTarget % 1000 === 0 ? `${stepTarget / 1000}k` : fmt(stepTarget)}
+                      </span>
+                    </dd>
+                  </div>
+                ) : null}
+                {health.active_kcal != null ? (
+                  <div>
+                    <dt className="text-[11px] text-muted">Active burn</dt>
+                    <dd className="tnum font-display text-[17px] font-bold text-ink">
+                      {fmt(health.active_kcal)}
+                      <span className="text-[11px] text-muted"> kcal</span>
+                    </dd>
+                  </div>
+                ) : null}
+                {health.sleep_minutes != null ? (
+                  <div>
+                    <dt className="text-[11px] text-muted">Sleep</dt>
+                    <dd className="tnum font-display text-[17px] font-bold text-ink">{fmtSleep(health.sleep_minutes)}</dd>
+                  </div>
+                ) : null}
+                {health.resting_hr != null ? (
+                  <div>
+                    <dt className="text-[11px] text-muted">Resting HR</dt>
+                    <dd className="tnum font-display text-[17px] font-bold text-ink">
+                      {health.resting_hr}
+                      <span className="text-[11px] text-muted"> bpm</span>
+                    </dd>
+                  </div>
+                ) : null}
+              </dl>
+            </div>
+          ) : null}
+          {watch ? (
+            <Link
+              href="/workout/history"
+              className={`flex min-h-11 items-center gap-2.5 text-ink ${health ? "border-t border-hairline pt-2.5" : ""}`}
+            >
+              <span aria-hidden className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-control bg-green-soft text-green">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+                  <rect x="6" y="5" width="12" height="14" rx="3" />
+                  <path d="M9 5V2h6v3M9 19v3h6v-3" />
+                </svg>
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold">
+                  {watch.kind}
+                  {watch.minutes != null ? ` · ${watch.minutes} min` : ""}
+                </span>
+                <span className="tnum block text-[11px] text-muted">
+                  From your Watch
+                  {watch.kcal != null ? ` · ${fmt(Number(watch.kcal))} kcal` : ""}
+                  {watch.avg_hr != null ? ` · avg HR ${watch.avg_hr}` : ""}
+                </span>
+              </span>
+              <span className="mark mark-green shrink-0">In Train</span>
+            </Link>
+          ) : null}
+        </section>
+      ) : null}
 
       {status && next ? (
         <Link href="/workout" className="glass flex items-center justify-between gap-3 px-4 py-3.5 text-ink">
