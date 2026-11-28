@@ -149,7 +149,7 @@ export default async function WorkoutTodayPage({
 
   return (
     <div className="space-y-3">
-      {/* Week status — the one dark band on this screen */}
+      {/* Week status — the one top band on this screen */}
       <section aria-label="This week" className="band grid grid-cols-3">
         <div className="band-edge px-3.5 py-3">
           <p className="text-[11px] text-band-label">Week {status.week}</p>

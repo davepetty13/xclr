@@ -21,7 +21,7 @@ export default async function WorkoutProgressPage() {
     .eq("user_id", user.id);
   const { data: sessions } = await supabase
     .from("workout_sessions")
-    .select("id, performed_at")
+    .select("id, performed_at, at_home")
     .eq("user_id", user.id);
   const { data: exRows } = await supabase
     .from("exercises")
@@ -29,8 +29,12 @@ export default async function WorkoutProgressPage() {
     .eq("user_id", user.id);
 
   const dateBySession = new Map<string, string>();
-  for (const s of sessions ?? [])
+  // Home sessions use lighter loads on purpose, so they stay out of the
+  // best-load trend (a home day would read as a drop).
+  for (const s of sessions ?? []) {
+    if (s.at_home === true) continue;
     dateBySession.set(s.id as string, localDate(tz, new Date(s.performed_at as string)));
+  }
   const nameById = new Map<string, string>();
   for (const e of exRows ?? []) nameById.set(e.id as string, e.name as string);
 

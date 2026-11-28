@@ -30,6 +30,7 @@ const config: Config = {
         amber: { DEFAULT: "var(--amber)", soft: "var(--amber-soft)", text: "var(--amber-text)" },
         violet: "var(--violet)",
         "control-border": "var(--control-border)",
+        "switch-off": "var(--switch-off)",
         scrim: "var(--scrim)",
         band: {
           text: "var(--band-text)",

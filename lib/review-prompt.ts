@@ -9,6 +9,9 @@ RULES (Doc 02 §4):
 - DELOAD or HOLD kindly if the notes flag illness, pain, or a rough week — and say so gently.
 - Skipped days are not failures. Never progress an exercise that was only on skipped days (no new data). Use the skip reasons: illness/pain → hold or ease off; busy/schedule → hold, maybe suggest a lighter plan; no reason → hold. Mention skips once, kindly, in a rationale where it matters.
 - Day edits, home days and extra activities are the user's own choices, not failures. An exercise swapped out or done as a home version this week has no new gym data — hold it. Home-version sets show the effort but never justify a gym load increase. Weigh hard extra activities (e.g. 60 min badminton) as added fatigue.
+- Home sessions are listed on their own. Home loads are lighter on purpose (what the user owns at home): never read them as a drop, a regression or a reason to lower a gym load, and never compare them with gym sets.
+- Plan changes the user made themselves (listed below) are their decision. Do NOT propose undoing one (e.g. swapping an exercise back, or restoring a removed one) unless there's a clear reason in this week's data or notes — and if you do, say that reason plainly in the rationale.
+- Watch workouts count as extra activity, like the ones the user logged by hand.
 - Respect any standing constraint in a coach_note (e.g. "increase only if the back feels good", "protect the wrist").
 - Every proposed item needs a short rationale in a warm coach voice (e.g. "You hit 4×10 at RPE 7 twice — room to load.").
 - You may propose changes to these fields only: suggested_load_value, prescribed_sets, rep_scheme, coach_note. Reference each exercise by its [ref] number. Only include items you actually want to change — an empty items list is a valid "hold everything" week.
@@ -37,7 +40,13 @@ export type ReviewContext = {
   activities?: { name: string; minutes: number | null; effort: string | null; kcal: number | null }[]; // extra activities
   avg_sleep_min: number | null;
   weight_trend: string; // short human string
-  // Daily averages from Apple Health / Health Connect, when synced.
+  // Sessions logged with "At home today" on — kept apart from gym actuals.
+  home_sessions?: { name: string; actuals: { load_value: number | null; load_type: string | null; reps: number | null; rpe: number | null }[] }[];
+  // Watch / phone workouts in the week (only when the user shares with the coach).
+  watch_workouts?: { kind: string; minutes: number | null; kcal: number | null }[];
+  // "From now on" plan edits the user made in the last 7 days, and who made them.
+  own_edits?: { who: string; lines: string[] };
+  // Daily averages from Apple Health / Health Connect, when synced and shared.
   activity?: { days: number; avg_steps: number | null; avg_active_kcal: number | null; avg_sleep_min: number | null } | null;
 };
 
@@ -81,6 +90,21 @@ export function buildReviewUserMessage(ctx: ReviewContext): string {
         : "none"
     }`,
     `Days trained at home this week (home versions of the exercises): ${ctx.home_days ?? 0}`,
+    `Home sessions (lighter on purpose — not comparable with gym sets): ${
+      ctx.home_sessions && ctx.home_sessions.length
+        ? ctx.home_sessions
+            .map(
+              (o) =>
+                `${oneLine(o.name)} — ${o.actuals
+                  .map((a) => `${a.reps ?? "?"} reps @ ${a.load_value ?? "?"}${a.load_type ? ` ${a.load_type}` : ""}${a.rpe != null ? ` RPE ${a.rpe}` : ""}`)
+                  .join("; ")}`
+            )
+            .join(" | ")
+        : "none"
+    }`,
+    `${oneLine(ctx.own_edits?.who || "The user")} changed the plan themselves (last 7 days): ${
+      ctx.own_edits && ctx.own_edits.lines.length ? ctx.own_edits.lines.map(oneLine).join(" | ") : "no changes"
+    }`,
     `Sets logged on exercises outside the plan (home or swapped versions): ${
       ctx.other_logged && ctx.other_logged.length
         ? ctx.other_logged
@@ -100,6 +124,13 @@ export function buildReviewUserMessage(ctx: ReviewContext): string {
             .join(" | ")
         : "none"
     }`,
+    ...(ctx.watch_workouts && ctx.watch_workouts.length
+      ? [
+          `Watch workouts this week (extra activity): ${ctx.watch_workouts
+            .map((w) => `${oneLine(w.kind)}${w.minutes != null ? ` ${w.minutes} min` : ""}${w.kcal != null ? `, ${w.kcal} kcal (from the Watch)` : ""}`)
+            .join(" | ")}`,
+        ]
+      : []),
     `Average sleep: ${ctx.avg_sleep_min != null ? `${Math.round(ctx.avg_sleep_min / 60)}h` : "unknown"}`,
     `Weight trend: ${ctx.weight_trend}`,
     ...(ctx.activity

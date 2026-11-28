@@ -11,7 +11,9 @@
 -- CRON_SECRET). See the comment at the very bottom of this file.
 
 -- ============================================================
--- profiles: which Apple Health fields Xclr accepts
+-- profiles: which Apple Health fields Xclr accepts, plus share_with_coach
+-- (send weekly averages + Watch workouts to the weekly review; set to true
+-- when the first sync link is made, and the user can switch it off).
 -- ============================================================
 alter table profiles add column if not exists health_sync_fields jsonb not null
   default '{"steps":true,"active":true,"workouts":true,"sleep":true,"weight":true,"resting_hr":true}'::jsonb;
@@ -96,10 +98,40 @@ create table if not exists health_sync_tokens (
   sync_count_today int not null default 0 check (sync_count_today >= 0)
 );
 alter table health_sync_tokens enable row level security;
+-- The owner may see that a link exists and delete it ("Turn off sync").
+-- Making a link and every sync-time update go through the service role, so a
+-- page can't reset the rate limit or plant a hash.
 drop policy if exists "own health_sync_tokens" on health_sync_tokens;
-create policy "own health_sync_tokens" on health_sync_tokens for all
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+drop policy if exists "own health_sync_tokens read" on health_sync_tokens;
+create policy "own health_sync_tokens read" on health_sync_tokens for select
+  using (user_id = auth.uid());
+drop policy if exists "own health_sync_tokens delete" on health_sync_tokens;
+create policy "own health_sync_tokens delete" on health_sync_tokens for delete
+  using (user_id = auth.uid());
+revoke insert, update on health_sync_tokens from authenticated, anon;
+grant select, delete on health_sync_tokens to authenticated;
 -- (token_hash is unique, which also indexes the endpoint's lookup.)
+
+-- Atomic rate limit for the sync endpoint: claims the link only if it wasn't
+-- used in the last p_gap_seconds, and counts today's syncs in the same
+-- statement. No row back = unknown link or too soon. Service role only.
+create or replace function public.claim_health_sync(p_token_hash text, p_gap_seconds int, p_today date)
+returns table (out_user_id uuid, out_sync_count int)
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  update public.health_sync_tokens t
+     set last_used_at = now(),
+         sync_count_today = case when t.sync_day = p_today then t.sync_count_today + 1 else 1 end,
+         sync_day = p_today
+   where t.token_hash = p_token_hash
+     and (t.last_used_at is null
+          or t.last_used_at < now() - make_interval(secs => greatest(coalesce(p_gap_seconds, 60), 1)))
+  returning t.user_id, t.sync_count_today;
+$$;
+revoke all on function public.claim_health_sync(text, int, date) from public, anon, authenticated;
+grant execute on function public.claim_health_sync(text, int, date) to service_role;
 
 -- ============================================================
 -- push_subscriptions: one row per iPhone/browser that allowed notifications
@@ -119,6 +151,12 @@ drop policy if exists "own push_subscriptions" on push_subscriptions;
 create policy "own push_subscriptions" on push_subscriptions for all
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 create index if not exists push_subscriptions_user on push_subscriptions (user_id);
+-- Only the real push services (Google/Chrome, Apple, Mozilla, Windows) — the
+-- server never posts to any other host.
+alter table push_subscriptions drop constraint if exists push_subscriptions_known_host;
+alter table push_subscriptions add constraint push_subscriptions_known_host check (
+  endpoint ~ '^https://(fcm\.googleapis\.com|[a-z0-9-]+(\.[a-z0-9-]+)*\.push\.apple\.com|updates\.push\.services\.mozilla\.com|[a-z0-9-]+(\.[a-z0-9-]+)*\.notify\.windows\.com)/'
+);
 
 -- ============================================================
 -- notification_prefs: which reminders, at what local time
@@ -159,7 +197,8 @@ create table if not exists notifications (
   kind text not null check (char_length(kind) <= 40),
   title text not null check (char_length(title) <= 120),
   body text check (body is null or char_length(body) <= 400),
-  url text check (url is null or (url ~ '^/' and char_length(url) <= 200)),
+  -- An in-app path only: "/x", never "//host" or "/\\host".
+  url text check (url is null or (url ~ '^/(?![/\\])' and char_length(url) <= 200)),
   action jsonb,                              -- optional one-tap action
   dedupe_key text not null check (char_length(dedupe_key) <= 120),
   created_at timestamptz not null default now(),
@@ -178,6 +217,10 @@ create policy "own notifications mark read" on notifications for update
 revoke insert, update, delete on notifications from authenticated, anon;
 grant select on notifications to authenticated;
 grant update (read_at) on notifications to authenticated;
+alter table notifications drop constraint if exists notifications_url_internal;
+alter table notifications add constraint notifications_url_internal check (
+  url is null or url ~ '^/(?![/\\])'
+);
 create index if not exists notifications_user_time on notifications (user_id, created_at desc);
 create index if not exists notifications_user_unread on notifications (user_id) where read_at is null;
 

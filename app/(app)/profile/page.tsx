@@ -90,7 +90,7 @@ export default async function ProfilePage() {
         <p className="mt-0.5 text-xs text-muted">Everything from signup. Change anything, then save that section.</p>
       </header>
 
-      {/* The one dark band */}
+      {/* The one top band */}
       <dl aria-label="Body" className="band grid grid-cols-3">
         {summary.map((s, i) => (
           <div key={s.label} className={`px-3.5 py-3 ${i === 0 ? "band-edge" : "border-l border-band-hairline"}`}>

@@ -141,10 +141,9 @@ export default async function WorkoutHistoryPage() {
                 {activityInfo.get(sess.id as string)?.effort
                   ? ` · ${(activityInfo.get(sess.id as string)?.effort ?? "").replace(/^./, (c) => c.toUpperCase())}`
                   : ""}
-                {" · "}
                 {activityInfo.get(sess.id as string)?.kcal != null
-                  ? `${activityInfo.get(sess.id as string)?.kcal} kcal`
-                  : "— kcal"}
+                  ? ` · ${activityInfo.get(sess.id as string)?.kcal} kcal`
+                  : ""}
               </p>
             ) : null}
             <ul className="mt-1">

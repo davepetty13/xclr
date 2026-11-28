@@ -1,8 +1,8 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getWeekStatus } from "@/lib/programs";
+import { getDayPlan, getWeekStatus } from "@/lib/programs";
 import { addDays, DEFAULT_TZ, localDayStartISO, todayLocal } from "@/lib/time";
-import { inQuietHours, readPrefs, timeLabel, toMinutes, type NotifyPrefs } from "@/lib/notify-prefs";
+import { MEAL_COUNTS, inQuietHours, readPrefs, timeLabel, toMinutes, type NotifyPrefs } from "@/lib/notify-prefs";
 import { pushToUser } from "@/lib/push";
 
 // The reminder job (app/api/cron/notify, every 15 min). For each user with
@@ -49,9 +49,9 @@ function due(time: string, now: number): boolean {
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 
 const MEAL_SLOTS = [
-  { key: "breakfast", on: "breakfast_on", time: "breakfast_time", counts: ["breakfast", "brunch"] },
-  { key: "lunch", on: "lunch_on", time: "lunch_time", counts: ["lunch", "brunch"] },
-  { key: "dinner", on: "dinner_on", time: "dinner_time", counts: ["dinner"] },
+  { key: "breakfast", on: "breakfast_on", time: "breakfast_time", counts: MEAL_COUNTS.breakfast },
+  { key: "lunch", on: "lunch_on", time: "lunch_time", counts: MEAL_COUNTS.lunch },
+  { key: "dinner", on: "dinner_on", time: "dinner_time", counts: MEAL_COUNTS.dinner },
 ] as const;
 
 type Ctx = {
@@ -148,23 +148,44 @@ async function usualDish(c: Ctx, meal: string) {
   };
 }
 
-// Today is a planned training day that isn't done, skipped or a rest day.
+// Is today a day to train? Never if something was already logged today.
+//  - preferred_days set → only on those weekdays.
+//  - not set → only when the days still to do (planned, not done, not
+//    skipped) are at least the days left this week, today included — i.e.
+//    you'd have to train today to finish the week.
+// A "Skip day" tapped today silences today only if the day skipped is the
+// one that would have been next today.
 async function plannedDay(c: Ctx, l: L) {
   const status = await l.week();
   if (!status || status.weekComplete || !status.nextDay) return null;
+  if ((await l.sessionsToday()) > 0) return null; // already trained today
+
   const pref = (await l.profile())?.preferred_days;
   const days = Array.isArray(pref) ? (pref as string[]) : [];
-  if (days.length && !days.includes(c.weekday)) return null; // rest day
-  if ((await l.sessionsToday()) > 0) return null; // already trained today
-  // Tapped "Skip day" today → today is off, even though a next day exists.
-  const { count: skippedToday } = await c.admin
+  if (days.length) {
+    if (!days.includes(c.weekday)) return null; // rest day
+  } else {
+    const planned = status.days.filter((d) => d.inWeek);
+    const toDo = planned.filter((d) => !d.done && !d.skipped).length;
+    const daysLeft =
+      Math.round((Date.parse(`${status.weekEndsOn}T00:00:00Z`) - Date.parse(`${c.today}T00:00:00Z`)) / 86_400_000) + 1;
+    if (toDo < daysLeft) return null; // still time later in the week
+  }
+
+  const { data: skipsToday } = await c.admin
     .from("day_skips")
-    .select("id", { count: "exact", head: true })
+    .select("program_day_id")
     .eq("user_id", c.userId)
+    .eq("program_id", status.program.id)
+    .eq("week_started_on", status.weekStartedOn)
     .gte("created_at", localDayStartISO(c.today, c.tz));
-  if ((skippedToday ?? 0) > 0) return null;
+  const skippedToday = new Set((skipsToday ?? []).map((k) => k.program_day_id as string));
+  if (skippedToday.size) {
+    const wouldBeNext = status.days.find((d) => d.inWeek && !d.done && (!d.skipped || skippedToday.has(d.id)));
+    if (wouldBeNext && skippedToday.has(wouldBeNext.id)) return null; // today's session was skipped
+  }
   const d = status.nextDay;
-  return { id: d.id, name: `Day ${d.day_index}${d.label ? ` · ${d.label}` : ""}` };
+  return { id: d.id, name: `Day ${d.day_index}${d.label ? ` · ${d.label}` : ""}`, programId: status.program.id, weekStartedOn: status.weekStartedOn };
 }
 
 async function mealReminders(c: Ctx, l: L, out: Candidate[]) {
@@ -190,15 +211,18 @@ async function trainingReminders(c: Ctx, l: L, out: Candidate[]) {
   if (c.prefs.session_on && due(c.prefs.session_time, c.now)) {
     const day = await plannedDay(c, l);
     if (day) {
-      const { count } = await c.admin
-        .from("program_exercises")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", c.userId)
-        .eq("program_day_id", day.id);
+      // This week's list ("This week only" edits win), and At home today.
+      const [plan, { data: home }] = await Promise.all([
+        getDayPlan(c.admin as unknown as Parameters<typeof getDayPlan>[0], c.userId, day.programId, day.id, day.weekStartedOn),
+        c.admin.from("at_home_days").select("local_date").eq("user_id", c.userId).eq("local_date", c.today).maybeSingle(),
+      ]);
+      const count = plan.items.length;
       out.push({
         kind: "session",
         title: `${day.name} today`,
-        body: count ? `${count} exercise${count === 1 ? "" : "s"} planned.` : "Your session is ready in Train.",
+        body: count
+          ? `${count} exercise${count === 1 ? "" : "s"} planned${home ? ", home versions" : ""}.`
+          : "Your session is ready in Train.",
         url: "/workout",
         dedupe_key: `session:${c.today}`,
       });
@@ -228,7 +252,7 @@ async function calorieReminders(c: Ctx, l: L, out: Candidate[]) {
     out.push({
       kind: "calories_high",
       title: "Over today's target",
-      body: `You're ${fmt(eaten - target)} kcal over today's target.`,
+      body: `You're about ${fmt(eaten - target)} kcal over today's target. Tomorrow evens it out.`,
       url: "/food",
       dedupe_key: `calories_high:${c.today}`,
     });
@@ -241,7 +265,7 @@ async function calorieReminders(c: Ctx, l: L, out: Candidate[]) {
       out.push({
         kind: "calories_low",
         title: "Eaten less than usual today",
-        body: `You've eaten ${fmt(eaten)} of ${fmt(target)} kcal. Eating too little can cost muscle.`,
+        body: `You've eaten ${fmt(eaten)} of ${fmt(target)} kcal so far. A proper dinner keeps you on track.`,
         url: "/food",
         dedupe_key: `calories_low:${c.today}`,
       });
@@ -364,7 +388,8 @@ export async function evaluateUser(admin: Supa, userId: string, prefsRow: Record
   }
   const prefs = readPrefs(prefsRow);
   const c: Ctx = { admin, userId, tz, today: todayLocal(tz), now: parts.minutes, weekday: parts.weekday, prefs };
-  if (inQuietHours(prefs, c.now)) return { created: 0, pushed: 0 };
+  // Quiet hours only stop the phone buzzing: the bell still gets every reminder.
+  const quiet = inQuietHours(prefs, c.now);
 
   const l = loaders(c);
   const out: Candidate[] = [];
@@ -394,7 +419,7 @@ export async function evaluateUser(admin: Supa, userId: string, prefsRow: Record
   if (error) throw new Error(`insert failed: ${error.code ?? "?"}`);
 
   let pushed = 0;
-  if (prefs.enabled) {
+  if (prefs.enabled && !quiet) {
     for (const n of inserted ?? []) {
       const sent = await pushToUser(admin, userId, {
         title: n.title as string,

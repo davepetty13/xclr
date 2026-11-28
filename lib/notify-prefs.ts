@@ -140,3 +140,10 @@ export function inQuietHours(p: Pick<NotifyPrefs, "quiet_start" | "quiet_end">, 
 // Inbox tabs.
 export const MEAL_KINDS = new Set(["meal_breakfast", "meal_lunch", "meal_dinner", "protein", "calories_low", "calories_high"]);
 export const TRAINING_KINDS = new Set(["session", "workout_missing", "review", "weigh_in"]);
+
+// Which logged meals count as "breakfast / lunch / dinner is logged".
+export const MEAL_COUNTS: Record<"breakfast" | "lunch" | "dinner", readonly string[]> = {
+  breakfast: ["breakfast", "brunch"],
+  lunch: ["lunch", "brunch"],
+  dinner: ["dinner"],
+};

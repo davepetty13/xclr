@@ -32,6 +32,7 @@ type SessionRow = {
   type: string | null;
   note: string | null;
   dayId: string | null;
+  atHome: boolean; // logged with "At home today" on
 };
 type SetRow = {
   sessionId: string;
@@ -229,7 +230,9 @@ function compareWith(ctx: ShareContext, top: Map<string, SetRow>, prevId: string
 
 // Earlier sessions of the same program day that have sets, oldest first.
 // "Last time" = the most recent of them; "Week 1" = the first time that day
-// was done. A session with no program day has nothing to compare against.
+// was done. A session with no program day has nothing to compare against, and
+// a home session is only compared with home sessions (gym with gym) — home
+// loads are lighter on purpose.
 function earlierSameDay(ctx: ShareContext, sess: SessionRow): SessionRow[] {
   if (!sess.dayId) return [];
   const at = Date.parse(sess.at);
@@ -238,6 +241,7 @@ function earlierSameDay(ctx: ShareContext, sess: SessionRow): SessionRow[] {
       (s) =>
         s.id !== sess.id &&
         s.dayId === sess.dayId &&
+        s.atHome === sess.atHome &&
         Date.parse(s.at) < at &&
         (ctx.setsBySession.get(s.id)?.length ?? 0) > 0
     )
@@ -304,7 +308,7 @@ export async function loadShareContext(supabase: Supa, userId: string): Promise<
       getWeekStatus(supabase, userId, tz),
       supabase
         .from("workout_sessions")
-        .select("id, performed_at, type, my_note, program_day_id")
+        .select("id, performed_at, type, my_note, program_day_id, at_home")
         .eq("user_id", userId)
         .order("performed_at", { ascending: true }),
       supabase
@@ -324,6 +328,7 @@ export async function loadShareContext(supabase: Supa, userId: string): Promise<
       type: (s.type as string | null) ?? null,
       note: ((s.my_note as string | null) ?? "").trim() || null,
       dayId: (s.program_day_id as string | null) ?? null,
+      atHome: s.at_home === true,
     });
 
   const sets: SetRow[] = [];
@@ -547,7 +552,8 @@ async function buildWeek(supabase: Supa, userId: string, ctx: ShareContext, st: 
   const weekSets: SetRow[] = [];
   for (const s of Array.from(ctx.sessions.values())) {
     if (Date.parse(s.at) < Date.parse(st.weekStartISO)) continue;
-    doneDates.add(localDate(ctx.tz, new Date(s.at)));
+    // An extra activity (badminton…) isn't a training day: it doesn't tick the strip.
+    if (s.type !== "activity") doneDates.add(localDate(ctx.tz, new Date(s.at)));
     weekSets.push(...(ctx.setsBySession.get(s.id) ?? []));
   }
   const skipDates = new Set<string>();
@@ -587,7 +593,17 @@ async function buildWeek(supabase: Supa, userId: string, ctx: ShareContext, st: 
   }));
   const prCount = countPRs(prSets, st.weekStartISO);
   if (prCount > 0) stats.push({ label: "PRS", value: String(prCount), tone: "pr" });
-  const mins = (sleep ?? []).map((r) => num(r.duration_min)).filter((m): m is number => m != null && m > 0);
+  let mins = (sleep ?? []).map((r) => num(r.duration_min)).filter((m): m is number => m != null && m > 0);
+  if (!mins.length) {
+    // No sleep typed in → what the Watch / phone synced, if anything.
+    const { data: hs } = await supabase
+      .from("health_daily")
+      .select("sleep_minutes")
+      .eq("user_id", userId)
+      .gte("local_date", from)
+      .lte("local_date", sunday);
+    mins = (hs ?? []).map((r) => num(r.sleep_minutes)).filter((m): m is number => m != null && m > 0);
+  }
   if (mins.length) {
     const avg = Math.round(mins.reduce((a, b) => a + b, 0) / mins.length);
     stats.push({ label: "AVG SLEEP", value: `${Math.floor(avg / 60)}h${String(avg % 60).padStart(2, "0")}` });

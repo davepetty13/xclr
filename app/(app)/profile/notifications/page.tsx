@@ -29,7 +29,7 @@ export default async function NotificationSettingsPage() {
         </Link>
         <div>
           <h1 className="font-display text-[21px] font-bold tracking-[-0.02em] text-ink">Notifications</h1>
-          <p className="text-xs text-muted">On this iPhone, from the Home Screen app</p>
+          <p className="text-xs text-muted">On this phone, from the Home Screen app</p>
         </div>
       </div>
 

@@ -33,7 +33,7 @@ export type ReviewSummary = {
   avgRpe: number | null;
 };
 
-// The one dark band on this screen: Sessions / PRs / Avg RPE.
+// The one top band on this screen: Sessions / PRs / Avg RPE.
 function SummaryBand({ summary }: { summary: ReviewSummary | null }) {
   if (!summary) return null;
   return (

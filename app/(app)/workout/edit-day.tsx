@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getEditLibrary, resetDayEdits, saveDayEdits, type LibraryExercise } from "./edit-actions";
 import { LOAD_TYPE_OPTIONS, MAX_DAY_ITEMS, type DayItem, type DayItemInput } from "@/lib/day-edits";
@@ -8,6 +8,7 @@ import { formatLoad, loadUnitLabel, type LoadType } from "@/lib/program-schema";
 import { CATEGORY_LABEL, guessCategory, type Category } from "@/lib/home-swaps";
 import { ErrorLine, Sheet, newKey } from "./sheet";
 import { SwapPicker, type Picked } from "./swap-picker";
+import { radioKeys } from "@/components/app/a11y";
 
 type Row = {
   key: string;
@@ -26,6 +27,7 @@ type Row = {
 
 type View = { kind: "list" } | { kind: "swap"; key: string } | { kind: "add" };
 type Mode = "week" | "forward";
+const MODES: readonly Mode[] = ["week", "forward"];
 
 const toRow = (it: DayItem): Row => ({
   key: it.key,
@@ -93,6 +95,7 @@ export function EditDay({
   const [editing, setEditing] = useState<string | null>(null);
   const [view, setView] = useState<View>({ kind: "list" });
   const [mode, setMode] = useState<Mode>("week");
+  const applyId = useId();
   const [activity, setActivity] = useState<{ name: string; minutes: string } | null>(null);
   const [library, setLibrary] = useState<LibraryExercise[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -345,6 +348,7 @@ export function EditDay({
                           <>
                             <button
                               type="button"
+                              aria-label={`Swap ${r.name}`}
                               onClick={() => setView({ kind: "swap", key: r.key })}
                               className="flex min-h-[40px] items-center rounded-control border border-control-border bg-card px-2.5 text-xs font-bold text-ink"
                             >
@@ -430,9 +434,16 @@ export function EditDay({
                 </div>
               )}
 
-              <div role="radiogroup" aria-label="Apply changes to" className="flex flex-col gap-1.5">
-                <span className="text-xs font-bold text-muted">Apply to</span>
-                <div className="grid grid-cols-2 rounded-[12px] bg-segment p-[3px]">
+              <div className="flex flex-col gap-1.5">
+                <span id={applyId} className="text-xs font-bold text-muted">
+                  Apply to
+                </span>
+                <div
+                  role="radiogroup"
+                  aria-labelledby={applyId}
+                  onKeyDown={radioKeys(MODES, mode, setMode, (m) => m === "week" && weekEnded)}
+                  className="grid grid-cols-2 rounded-[12px] bg-segment p-[3px]"
+                >
                   {(
                     [
                       ["week", "This week only"],
@@ -447,6 +458,7 @@ export function EditDay({
                         type="button"
                         role="radio"
                         aria-checked={on}
+                        tabIndex={on ? 0 : -1}
                         disabled={off}
                         onClick={() => setMode(m)}
                         className={`min-h-[40px] rounded-control text-[13px] disabled:opacity-55 ${
@@ -470,7 +482,7 @@ export function EditDay({
               </div>
 
               <ErrorLine error={error} />
-              <button type="button" disabled={busy} onClick={save} className="btn-primary w-full text-[15px]">
+              <button type="button" disabled={busy} onClick={save} className="btn-primary btn-primary-green w-full text-[15px]">
                 {busy ? "Saving…" : "Save changes"}
               </button>
               <p className="text-center text-[11px] text-muted">

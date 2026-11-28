@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { formatLoad, loadUnitLabel, type LoadType } from "@/lib/program-schema";
 import {
   CATEGORIES,
@@ -51,6 +51,7 @@ export function SwapPicker({
   defaultCategory: Category | null;
   onPick: (p: Picked) => void;
 }) {
+  const listId = useId();
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<Tab>("gym");
   const [cat, setCat] = useState<Category | null>(base?.category ?? defaultCategory);
@@ -185,7 +186,15 @@ export function SwapPicker({
         <>
           <div role="tablist" aria-label="Where" className="flex gap-5 border-b border-hairline">
             {(["gym", "home", "bodyweight"] as Tab[]).map((t) => (
-              <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className="tab">
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={tab === t}
+                aria-controls={listId}
+                onClick={() => setTab(t)}
+                className="tab"
+              >
                 {t === "gym" ? "Gym" : t === "home" ? "Home" : "Bodyweight"}
               </button>
             ))}
@@ -213,11 +222,15 @@ export function SwapPicker({
       )}
 
       {tab === "gym" && !typed && library === null ? (
-        <p className="text-sm text-muted">Loading your exercises…</p>
+        <p id={listId} className="text-sm text-muted">
+          Loading your exercises…
+        </p>
       ) : all.length ? (
-        <ul className="overflow-hidden rounded-[16px] border border-control-border">{all.map((c, i) => option(c, i, all.length))}</ul>
+        <ul id={listId} className="overflow-hidden rounded-[16px] border border-control-border">
+          {all.map((c, i) => option(c, i, all.length))}
+        </ul>
       ) : (
-        <p className="text-sm text-muted">
+        <p id={listId} className="text-sm text-muted">
           {typed ? "Nothing matches. Keep typing to use your own name." : "No suggestions here yet. Try another tab or type a name."}
         </p>
       )}

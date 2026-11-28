@@ -3,8 +3,11 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { quickAddFromLibrary } from "@/app/(app)/food/actions";
-import { BOOL_KEYS, QUIET_OPTIONS, TIME_KEYS, validStep, type NotifyPrefs } from "@/lib/notify-prefs";
+import { BOOL_KEYS, MEAL_COUNTS, QUIET_OPTIONS, TIME_KEYS, validStep, type NotifyPrefs } from "@/lib/notify-prefs";
 import { pushConfigured, pushToUser } from "@/lib/push";
+import { isKnownPushEndpoint } from "@/lib/safe-url";
+import { getUserTz } from "@/lib/goal-change";
+import { localDate, localDayStartISO, todayLocal } from "@/lib/time";
 
 export type SimpleResult = { ok: true } | { ok: false; error: string };
 
@@ -41,33 +44,45 @@ export async function saveNotifyPrefs(input: NotifyPrefs): Promise<SimpleResult>
 
 type SubInput = { endpoint: string; keys: { p256dh: string; auth: string } };
 
-// Save this device's push subscription. One device endpoint belongs to one
-// user, so this writes with the service role, always for the signed-in id.
+// Save this device's push subscription with the user's own (RLS) client.
+// Only real push services are accepted (Google/Chrome, Apple, Mozilla,
+// Windows; the DB checks the same). One device endpoint belongs to one user:
+// a row already owned by another account is never taken over — RLS hides it,
+// the insert hits the unique endpoint and we say so.
 export async function savePushSubscription(sub: SubInput, userAgent: string | null): Promise<SimpleResult> {
   const s = await me();
   if (!s) return SIGNED_OUT;
   const endpoint = typeof sub?.endpoint === "string" ? sub.endpoint : "";
   const p256dh = typeof sub?.keys?.p256dh === "string" ? sub.keys.p256dh : "";
   const auth = typeof sub?.keys?.auth === "string" ? sub.keys.auth : "";
-  if (!/^https:\/\/[^\s]{1,990}$/.test(endpoint) || !/^[\w-]{20,200}$/.test(p256dh) || !/^[\w-]{8,100}$/.test(auth))
+  if (!isKnownPushEndpoint(endpoint) || !/^[\w-]{20,200}$/.test(p256dh) || !/^[\w-]{8,100}$/.test(auth))
     return { ok: false, error: "This device sent an odd subscription. Try again." };
-  let admin;
-  try {
-    admin = createAdminClient();
-  } catch {
-    return { ok: false, error: "Notifications aren't set up on the server yet." };
+  const ua = typeof userAgent === "string" ? userAgent.slice(0, 300) : null;
+
+  const { data: mine } = await s.supabase
+    .from("push_subscriptions")
+    .select("id")
+    .eq("user_id", s.userId)
+    .eq("endpoint", endpoint)
+    .maybeSingle();
+  if (mine) {
+    const { error } = await s.supabase
+      .from("push_subscriptions")
+      .update({ p256dh, auth, user_agent: ua })
+      .eq("id", mine.id as string)
+      .eq("user_id", s.userId);
+    if (error) return { ok: false, error: "Couldn't turn notifications on. Try again." };
+  } else {
+    const { error } = await s.supabase
+      .from("push_subscriptions")
+      .insert({ user_id: s.userId, endpoint, p256dh, auth, user_agent: ua });
+    if (error?.code === "23505")
+      return {
+        ok: false,
+        error: "This phone gets notifications for another Xclr account. Turn them off there first.",
+      };
+    if (error) return { ok: false, error: "Couldn't turn notifications on. Try again." };
   }
-  const { error } = await admin.from("push_subscriptions").upsert(
-    {
-      user_id: s.userId,
-      endpoint,
-      p256dh,
-      auth,
-      user_agent: typeof userAgent === "string" ? userAgent.slice(0, 300) : null,
-    },
-    { onConflict: "endpoint" }
-  );
-  if (error) return { ok: false, error: "Couldn't turn notifications on. Try again." };
   await s.supabase
     .from("notification_prefs")
     .upsert({ user_id: s.userId, enabled: true, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
@@ -125,22 +140,49 @@ export async function markNotificationsRead(ids: string[] | "all"): Promise<Simp
 }
 
 // One-tap action on a reminder ("Log usual lunch"). The action is read from
-// the saved notification, never from the browser.
-export async function runNotificationAction(id: string): Promise<SimpleResult> {
+// the saved notification, never from the browser. It only works on today's
+// reminder, and only while that meal still isn't logged.
+export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
+
+export async function runNotificationAction(id: string): Promise<ActionResult> {
   const s = await me();
   if (!s) return SIGNED_OUT;
   if (typeof id !== "string" || !/^[0-9a-f-]{36}$/.test(id)) return { ok: false, error: "That reminder is gone." };
   const { data: n } = await s.supabase
     .from("notifications")
-    .select("id, action")
+    .select("id, action, created_at")
     .eq("id", id)
     .eq("user_id", s.userId)
     .maybeSingle();
   const action = n?.action as { type?: string; library_id?: string; meal?: string } | null | undefined;
   if (!n || action?.type !== "log_library" || typeof action.library_id !== "string")
     return { ok: false, error: "That reminder has no quick action." };
-  const r = await quickAddFromLibrary(action.library_id, typeof action.meal === "string" ? action.meal : null);
+  const meal = action.meal === "breakfast" || action.meal === "lunch" || action.meal === "dinner" ? action.meal : null;
+  if (!meal) return { ok: false, error: "That reminder has no quick action." };
+
+  const markRead = () =>
+    s.supabase.from("notifications").update({ read_at: new Date().toISOString() }).eq("id", id).eq("user_id", s.userId);
+
+  const tz = await getUserTz(s.supabase, s.userId);
+  const today = todayLocal(tz);
+  if (localDate(tz, new Date(n.created_at as string)) !== today) {
+    await markRead();
+    return { ok: false, error: `That was an earlier day's reminder. Add today's ${meal} in Food.` };
+  }
+  const { data: logged } = await s.supabase
+    .from("food_logs")
+    .select("id")
+    .eq("user_id", s.userId)
+    .in("meal", [...MEAL_COUNTS[meal]])
+    .gte("logged_at", localDayStartISO(today, tz))
+    .limit(1);
+  if (logged?.length) {
+    await markRead();
+    return { ok: true, message: `Already logged — ${meal} is in today's list.` };
+  }
+
+  const r = await quickAddFromLibrary(action.library_id, meal);
   if (!r.ok) return r;
-  await s.supabase.from("notifications").update({ read_at: new Date().toISOString() }).eq("id", id).eq("user_id", s.userId);
-  return { ok: true };
+  await markRead();
+  return { ok: true, message: "Logged." };
 }

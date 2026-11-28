@@ -1,15 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { makeSyncLink, saveHealthFields } from "@/app/(app)/profile/health-sync/actions";
+import { makeSyncLink, saveHealthFields, saveShareWithCoach, turnOffSync } from "@/app/(app)/profile/health-sync/actions";
 import type { HealthFields } from "@/lib/health";
 
 const FIELD_ROWS: { keys: (keyof HealthFields)[]; title: string; hint: string }[] = [
   { keys: ["steps"], title: "Steps", hint: "Daily total" },
   { keys: ["active"], title: "Active calories", hint: "Feeds 'Burned' on Today" },
   { keys: ["workouts"], title: "Workouts", hint: "Show in Train as extra activity" },
-  { keys: ["sleep", "resting_hr"], title: "Sleep & resting heart rate", hint: "For your weekly review" },
+  { keys: ["sleep", "resting_hr"], title: "Sleep & resting heart rate", hint: "Shown on Today. Sleep can go to your coach; resting heart rate never does." },
   { keys: ["weight"], title: "Weight", hint: "Only from a smart scale" },
 ];
 
@@ -32,23 +32,57 @@ export function HealthSyncPanel({
   endpoint,
   hasLink,
   fields: initialFields,
+  shareWithCoach: initialShare,
   syncsToday,
   nowMin,
 }: {
   endpoint: string;
   hasLink: boolean;
   fields: HealthFields;
+  shareWithCoach: boolean;
   syncsToday: number;
   nowMin: number;
 }) {
   const router = useRouter();
   const [fields, setFields] = useState(initialFields);
+  const [share, setShare] = useState(initialShare);
   const [fieldMsg, setFieldMsg] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [showSteps, setShowSteps] = useState(false);
+  // One in-app confirm for both "new link" buttons, and one for "Turn off sync".
+  const [confirming, setConfirming] = useState<"new" | "off" | null>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => setShare(initialShare), [initialShare]);
+  useEffect(() => {
+    if (confirming) confirmRef.current?.focus();
+  }, [confirming]);
+
+  function ask(kind: "new" | "off", opener: HTMLElement) {
+    openerRef.current = opener;
+    setError(null);
+    setNotice(null);
+    setConfirming(kind);
+  }
+  function cancelConfirm() {
+    setConfirming(null);
+    openerRef.current?.focus();
+  }
+
+  async function toggleShare(on: boolean) {
+    setShare(on);
+    setFieldMsg(null);
+    const r = await saveShareWithCoach(on).catch(() => ({ ok: false as const, error: "Couldn't save. Check your connection." }));
+    if (!r.ok) {
+      setShare(!on);
+      setFieldMsg(r.error);
+    } else setFieldMsg("Saved");
+  }
 
   async function toggle(keys: (keyof HealthFields)[], on: boolean) {
     const next = { ...fields };
@@ -62,11 +96,19 @@ export function HealthSyncPanel({
     } else setFieldMsg("Saved");
   }
 
+  // A first link is made straight away; replacing one asks first (in-app).
+  function requestNewLink(opener: HTMLElement) {
+    if (busy) return;
+    if (hasLink || token) ask("new", opener);
+    else void newLink();
+  }
+
   async function newLink() {
     if (busy) return;
-    if (hasLink && !token && !confirm("Make a new link? The old one stops working right away, so update your shortcut after.")) return;
+    setConfirming(null);
     setBusy(true);
     setError(null);
+    setNotice(null);
     setCopied(null);
     try {
       const r = await makeSyncLink();
@@ -74,6 +116,26 @@ export function HealthSyncPanel({
       else {
         setToken(r.token);
         if (await copy(r.token)) setCopied("token");
+        router.refresh();
+      }
+    } catch {
+      setError("That didn't go through. Check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function turnOff() {
+    if (busy) return;
+    setConfirming(null);
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await turnOffSync();
+      if (!r.ok) setError(r.error);
+      else {
+        setToken(null);
+        setNotice("Sync is off. Your shortcut won't send anything now. Numbers already synced stay.");
         router.refresh();
       }
     } catch {
@@ -109,7 +171,7 @@ export function HealthSyncPanel({
                 type="checkbox"
                 checked={on}
                 onChange={(e) => void toggle(row.keys, e.target.checked)}
-                className="h-5 w-5 shrink-0 accent-[var(--green)]"
+                className="h-5 w-5 shrink-0 accent-green"
               />
               <span className="flex-1 py-1.5">
                 <span className="block text-sm font-semibold text-ink">{row.title}</span>
@@ -118,6 +180,20 @@ export function HealthSyncPanel({
             </label>
           );
         })}
+        <label className="flex min-h-[48px] items-center gap-2.5 border-t border-hairline">
+          <input
+            type="checkbox"
+            checked={share}
+            onChange={(e) => void toggleShare(e.target.checked)}
+            className="h-5 w-5 shrink-0 accent-green"
+          />
+          <span className="flex-1 py-1.5">
+            <span className="block text-sm font-semibold text-ink">Share with my coach</span>
+            <span className="block text-[11px] text-muted">
+              Weekly steps, burn, sleep and Watch workouts go into your weekly review. Resting heart rate never does.
+            </span>
+          </span>
+        </label>
         <p aria-live="polite" className="pb-2 text-xs font-semibold empty:hidden">
           {fieldMsg ? <span className={fieldMsg === "Saved" ? "text-green" : "text-ember-text"}>{fieldMsg}</span> : null}
         </p>
@@ -170,7 +246,12 @@ export function HealthSyncPanel({
         ) : null}
 
         <div className="grid grid-cols-2 gap-2">
-          <button type="button" onClick={() => void newLink()} disabled={busy} className="btn-primary btn-primary-green text-sm">
+          <button
+            type="button"
+            onClick={(e) => requestNewLink(e.currentTarget)}
+            disabled={busy}
+            className="btn-primary btn-primary-green text-sm"
+          >
             {busy ? "Making…" : hasLink || token ? "Copy a new link" : "Copy my sync link"}
           </button>
           <button
@@ -183,9 +264,36 @@ export function HealthSyncPanel({
             {showSteps ? "Hide the steps" : "Show the steps"}
           </button>
         </div>
+        {confirming ? (
+          <div role="group" aria-labelledby="sync-confirm-h" className="flex flex-col gap-2 rounded-tile bg-field p-3">
+            <p id="sync-confirm-h" className="text-[13px] font-semibold text-ink">
+              {confirming === "new"
+                ? "Make a new link? The old one stops working right away, so paste the new key into your shortcut after."
+                : "Turn off sync? Your shortcut stops working right away. Numbers already synced stay."}
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={cancelConfirm} className="btn-secondary min-h-10 text-[13px]">
+                Keep it
+              </button>
+              <button
+                ref={confirmRef}
+                type="button"
+                onClick={() => void (confirming === "new" ? newLink() : turnOff())}
+                className={`min-h-10 text-[13px] ${confirming === "off" ? "btn-secondary text-ember-text" : "btn-primary btn-primary-green"}`}
+              >
+                {confirming === "new" ? "Make a new link" : "Turn off sync"}
+              </button>
+            </div>
+          </div>
+        ) : null}
         {error ? (
           <p role="alert" className="text-xs font-semibold text-ember-text">
             {error}
+          </p>
+        ) : null}
+        {notice ? (
+          <p role="status" className="text-xs font-semibold text-green">
+            {notice}
           </p>
         ) : null}
         <p className="text-[11px] text-muted">
@@ -193,11 +301,25 @@ export function HealthSyncPanel({
             ? "You have a link set up. For safety Xclr only shows it once. "
             : "The link is private to you. "}
           If it leaks, tap{" "}
-          <button type="button" onClick={() => void newLink()} className="min-h-10 font-semibold text-ink underline">
+          <button
+            type="button"
+            onClick={(e) => requestNewLink(e.currentTarget)}
+            className="min-h-10 font-semibold text-ink underline"
+          >
             Make a new link
           </button>{" "}
           and the old one stops working.
         </p>
+        {hasLink || token ? (
+          <button
+            type="button"
+            onClick={(e) => ask("off", e.currentTarget)}
+            disabled={busy}
+            className="btn-secondary self-start text-[13px] text-ember-text"
+          >
+            Turn off sync
+          </button>
+        ) : null}
 
         {showSteps ? <ShortcutSteps /> : null}
       </section>
@@ -247,7 +369,8 @@ function ShortcutSteps() {
             <strong>Find Health Samples</strong> → <em>Sleep Analysis</em>, Start Date in the last 1 day, Value is{" "}
             <em>Asleep</em> (or <em>In Bed</em> if your Watch doesn&apos;t track sleep stages). Then{" "}
             <strong>Get Details of Health Sample</strong> → <em>Duration</em>, and <strong>Calculate Statistics</strong>{" "}
-            → <em>Sum</em>. Call it &ldquo;Sleep&rdquo; (minutes or seconds both work).
+            → <em>Sum</em>. Call it &ldquo;Sleep&rdquo;. Shortcuts gives this in seconds, so it goes in the body as{" "}
+            <code className="text-xs">sleep_seconds</code>.
           </li>
           <li>
             <strong>Find Health Samples</strong> → <em>Weight</em>, Today, latest first, limit 1. Call it
@@ -271,12 +394,16 @@ function ShortcutSteps() {
 steps = Steps
 active_kcal = Active
 resting_hr = Resting
-sleep_minutes = Sleep
+sleep_seconds = Sleep
 weight_kg = Weight
 workouts = Workouts   (type: Array)`}
             </code>
           </li>
         </ol>
+        <p className="mt-1.5">
+          Sleep in another unit? Use <code className="text-xs">sleep_minutes</code> for minutes or{" "}
+          <code className="text-xs">sleep_hours</code> for hours instead. Xclr never guesses the unit.
+        </p>
         <p className="mt-1.5">Tap ▶ once to test. You should see &ldquo;ok&rdquo; and a sync count.</p>
       </div>
 

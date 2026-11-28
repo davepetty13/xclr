@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { radioKeys, useFocusTrap } from "@/components/app/a11y";
 import {
   cardToBlob,
   COMPARE_OPTIONS,
@@ -116,6 +117,7 @@ export function ShareSheet({
   const fileRef = useRef<File | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const sheetRef = useRef<HTMLElement>(null);
   const photoUrlRef = useRef<string | null>(null);
   const drawGen = useRef(0);
   const headingId = useId();
@@ -145,6 +147,8 @@ export function ShareSheet({
       alive = false;
     };
   }, []);
+
+  useFocusTrap(sheetRef, mounted);
 
   // Focus, Escape, and no page scroll behind the sheet.
   useEffect(() => {
@@ -270,6 +274,7 @@ export function ShareSheet({
     <>
       <div aria-hidden="true" onClick={onClose} className="fixed inset-0 z-30 bg-scrim" />
       <section
+        ref={sheetRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={headingId}
@@ -362,6 +367,11 @@ export function ShareSheet({
             <div
               role="radiogroup"
               aria-labelledby={`${previewId}-gains`}
+              onKeyDown={radioKeys(
+                GAIN_UNITS.map((u) => u.value),
+                prefs.gainUnit,
+                (v) => updatePrefs({ gainUnit: v })
+              )}
               className="grid grid-cols-2 rounded-control bg-segment p-0.5"
             >
               {GAIN_UNITS.map((u) => (
@@ -370,6 +380,7 @@ export function ShareSheet({
                   type="button"
                   role="radio"
                   aria-checked={prefs.gainUnit === u.value}
+                  tabIndex={prefs.gainUnit === u.value ? 0 : -1}
                   onClick={() => updatePrefs({ gainUnit: u.value })}
                   className={`min-h-[40px] rounded-lg text-[13px] transition-colors ${
                     prefs.gainUnit === u.value ? "bg-ink font-bold text-card" : "font-semibold text-muted"

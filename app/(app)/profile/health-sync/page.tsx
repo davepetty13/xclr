@@ -1,9 +1,8 @@
 import Link from "next/link";
-import { headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentUser } from "@/lib/session";
 import { DEFAULT_TZ, localDate, todayLocal } from "@/lib/time";
-import { readHealthFields } from "@/lib/health";
+import { readHealthFields, readShareWithCoach } from "@/lib/health";
 import { HealthSyncPanel } from "@/components/app/health-sync-panel";
 
 function clock(iso: string, tz: string): string {
@@ -37,10 +36,10 @@ export default async function HealthSyncPage() {
       .maybeSingle(),
   ]);
 
-  const h = headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "xclr.vercel.app";
-  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  const endpoint = `${proto}://${host}/api/health/sync`;
+  // From config, never from request headers (a forged Host can't change the
+  // link the user copies into their shortcut).
+  const origin = (process.env.APP_URL || "https://xclr.vercel.app").replace(/\/+$/, "");
+  const endpoint = `${origin}/api/health/sync`;
 
   const lastSync = tok?.last_used_at ? (tok.last_used_at as string) : null;
   const syncsToday = tok?.sync_day === today ? Number(tok.sync_count_today) || 0 : 0;
@@ -100,6 +99,7 @@ export default async function HealthSyncPage() {
         endpoint={endpoint}
         hasLink={!!tok}
         fields={readHealthFields(profile?.health_sync_fields)}
+        shareWithCoach={readShareWithCoach(profile?.health_sync_fields)}
         syncsToday={syncsToday}
         nowMin={nowMin}
       />

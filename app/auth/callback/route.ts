@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { isInternalPath } from "@/lib/safe-url";
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
   // Only same-site paths: "/x" yes; "//evil.com", "/\\evil", "@evil.com" no.
   const raw = searchParams.get("next");
-  const next =
-    raw && raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/\\") ? raw : "/";
+  const next = isInternalPath(raw) ? raw : "/";
 
   if (code) {
     const supabase = createClient();

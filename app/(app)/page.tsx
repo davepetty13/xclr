@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { kgToLbs } from "@/lib/units";
-import { getWeekStatus } from "@/lib/programs";
+import { getDayPlan, getWeekStatus } from "@/lib/programs";
 import { GOAL_LABEL, getUserTz, isGoal } from "@/lib/goal-change";
 import { addDays, localDayStartISO, todayLocal } from "@/lib/time";
 import { WeightSparkline } from "@/components/app/weight-sparkline";
@@ -63,7 +63,7 @@ export default async function TodayPage() {
         .order("logged_at", { ascending: true }),
       supabase
         .from("weights")
-        .select("measured_on, kg")
+        .select("measured_on, kg, source")
         .eq("user_id", user.id)
         .order("measured_on", { ascending: false })
         .limit(14),
@@ -76,7 +76,7 @@ export default async function TodayPage() {
       // Apple Health / Health Connect: today's totals + today's Watch workouts.
       supabase
         .from("health_daily")
-        .select("local_date, steps, active_kcal, resting_hr, sleep_minutes, weight_kg, updated_at")
+        .select("local_date, steps, active_kcal, resting_hr, sleep_minutes, weight_kg, updated_at, source")
         .eq("user_id", user.id)
         .eq("local_date", today)
         .maybeSingle(),
@@ -88,6 +88,12 @@ export default async function TodayPage() {
         .order("started_at", { ascending: false })
         .limit(1),
       loadInbox(supabase, user.id, tz, today),
+      // Every user gets bell reminders: make sure a settings row exists (push
+      // stays off until they allow it). Never overwrites saved settings.
+      supabase
+        .from("notification_prefs")
+        .upsert({ user_id: user.id }, { onConflict: "user_id", ignoreDuplicates: true })
+        .then(() => null),
     ]);
 
   const unit = profile?.weight_unit === "lbs" ? "lbs" : "kg";
@@ -106,6 +112,7 @@ export default async function TodayPage() {
   // Weight tile
   const weights = (weightRows ?? []).map((w) => Number(w.kg)).filter((n) => Number.isFinite(n));
   const currentWeight = weights[0] ?? null;
+  const fromScale = (weightRows ?? [])[0]?.source === "apple_health";
   const peakWeight = weights.length ? Math.max(...weights) : null;
   const deltaFromPeak =
     currentWeight != null && peakWeight != null ? currentWeight - peakWeight : null;
@@ -116,15 +123,21 @@ export default async function TodayPage() {
   // Avg sleep over this local week (program week if there is one, else last 7
   // days). Fetched together with today's exercise count.
   const sleepFrom = status?.weekStartedOn ?? addDays(today, -6);
-  const [exerciseCount, { data: sleepRows }] = await Promise.all([
+  // Exercise count = this week's list for the day ("This week only" edits
+  // win over the plan); "At home today" is noted beside it.
+  const [exerciseCount, atHomeToday, { data: sleepRows }] = await Promise.all([
+    next && status
+      ? getDayPlan(supabase, user.id, status.program.id, next.id, status.weekStartedOn).then((p) => p.items.length)
+      : Promise.resolve(0),
     next
       ? supabase
-          .from("program_exercises")
-          .select("id", { count: "exact", head: true })
+          .from("at_home_days")
+          .select("local_date")
           .eq("user_id", user.id)
-          .eq("program_day_id", next.id)
-          .then((r) => r.count ?? 0)
-      : Promise.resolve(0),
+          .eq("local_date", today)
+          .maybeSingle()
+          .then((r) => !!r.data)
+      : Promise.resolve(false),
     supabase
       .from("sleep_logs")
       .select("duration_min")
@@ -163,6 +176,11 @@ export default async function TodayPage() {
   const syncedAt = health?.updated_at
     ? new Date(health.updated_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: tz })
     : null;
+  const healthSource = (healthRow as { source?: string } | null)?.source;
+  const sourceLabel =
+    healthSource === "apple_health" ? "Apple Watch" : healthSource === "health_connect" ? "Health Connect" : "Synced";
+  // "Apple Watch · synced 9:30 AM" (or "Synced 9:30 AM" when the app is unknown).
+  const syncLine = syncedAt ? (sourceLabel === "Synced" ? `Synced ${syncedAt}` : `${sourceLabel} · synced ${syncedAt}`) : null;
   const stepPct = health?.steps != null ? Math.min(1, health.steps / stepTarget) : 0;
   const RING = 2 * Math.PI * 31;
 
@@ -210,7 +228,7 @@ export default async function TodayPage() {
         </div>
       </header>
 
-      {/* The one dark band: calories left today */}
+      {/* The one top band: calories left today */}
       <section aria-label="Calories today" className="band">
         <div className="band-edge px-[18px] pb-3.5 pt-[18px]">
           <div className="flex items-center justify-between gap-3">
@@ -279,7 +297,7 @@ export default async function TodayPage() {
             <h2 id="activity-h" className="text-sm font-bold text-ink">
               Activity
             </h2>
-            {syncedAt ? <span className="text-[11px] text-muted">Synced {syncedAt}</span> : null}
+            {syncLine ? <span className="text-[11px] text-muted">{syncLine}</span> : null}
           </div>
           {health ? (
             <div className={`grid items-center gap-3.5 ${health.steps != null ? "grid-cols-[auto_1fr]" : "grid-cols-1"}`}>
@@ -378,6 +396,7 @@ export default async function TodayPage() {
             {exerciseCount > 0 ? (
               <p className="mt-0.5 text-xs text-muted">
                 {exerciseCount} exercise{exerciseCount === 1 ? "" : "s"}
+                {atHomeToday ? " · at home" : ""}
               </p>
             ) : null}
           </div>
@@ -396,6 +415,13 @@ export default async function TodayPage() {
           </span>
         </Link>
       ) : null}
+
+      <Link
+        href="/workout?add=activity"
+        className="flex min-h-[44px] items-center justify-center rounded-control border border-dashed border-muted text-[13px] font-bold text-ink"
+      >
+        + Add activity
+      </Link>
 
       <div className="grid grid-cols-2 gap-3">
         <section aria-labelledby="week-h" className="glass flex flex-col gap-2 px-4 py-3.5">
@@ -436,7 +462,7 @@ export default async function TodayPage() {
 
         <section aria-labelledby="weight-h" className="glass flex flex-col gap-1.5 px-4 py-3.5">
           <h2 id="weight-h" className="text-xs font-semibold text-muted">
-            Weight
+            {fromScale ? "Weight · smart scale" : "Weight"}
           </h2>
           {currentWeight != null ? (
             <>

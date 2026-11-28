@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { addDays, localDate } from "@/lib/time";
+import { isInternalPath } from "@/lib/safe-url";
 import type { InboxItem } from "@/components/app/notify-bell";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -28,14 +29,14 @@ export async function loadInbox(supabase: Supa, userId: string, tz: string, toda
     const label = typeof a?.label === "string" ? a.label.slice(0, 40) : null;
     let action: InboxItem["action"] = null;
     if (a?.type === "log_library" && label) action = { type: "log_library", label };
-    else if (a?.type === "link" && label && typeof a.href === "string" && a.href.startsWith("/"))
+    else if (a?.type === "link" && label && isInternalPath(a.href))
       action = { type: "link", label, href: a.href };
     return {
       id: r.id as string,
       kind: r.kind as string,
       title: r.title as string,
       body: (r.body as string | null) ?? null,
-      url: typeof r.url === "string" && r.url.startsWith("/") ? r.url : null,
+      url: isInternalPath(r.url) ? r.url : null,
       when: whenLabel(r.created_at as string, tz, today),
       unread: r.read_at == null,
       action,

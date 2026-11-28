@@ -2,10 +2,11 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useFocusTrap } from "@/components/app/a11y";
 
 // Solid bottom sheet used by Edit day, Add activity and Home equipment.
-// Scrim tap / Escape / the X close it; focus moves in on open and back to the
-// opener (returnFocus) on close.
+// Scrim tap / Escape / the X close it; focus moves in on open, Tab stays
+// inside while open, and focus goes back to the opener (returnFocus) on close.
 export function Sheet({
   title,
   subtitle,
@@ -24,6 +25,7 @@ export function Sheet({
   const [mounted, setMounted] = useState(false);
   const headingId = useId();
   const firstRef = useRef<HTMLButtonElement>(null);
+  const sheetRef = useRef<HTMLElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
@@ -50,11 +52,14 @@ export function Sheet({
     if (mounted) firstRef.current?.focus();
   }, [mounted, hasBack, title]);
 
+  useFocusTrap(sheetRef, mounted);
+
   if (!mounted) return null;
   return createPortal(
     <>
       <div aria-hidden="true" onClick={onClose} className="fixed inset-0 z-30 bg-scrim" />
       <section
+        ref={sheetRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={headingId}

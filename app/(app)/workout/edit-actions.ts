@@ -9,7 +9,7 @@ import { getUserTz } from "@/lib/goal-change";
 import { todayLocal } from "@/lib/time";
 import { resolveExerciseIds } from "@/lib/exercises";
 import { LOAD_TYPES, type LoadType } from "@/lib/program-schema";
-import { MAX_DAY_ITEMS, cleanItem, cleanName, parseRepRange, type DayItem, type DayItemInput } from "@/lib/day-edits";
+import { MAX_DAY_ITEMS, cleanItem, cleanName, describeDayEdit, parseRepRange, type DayItem, type DayItemInput } from "@/lib/day-edits";
 import { asCategory, guessCategory, normalizeEquipment, type HomeEquipment } from "@/lib/home-swaps";
 
 export type EditResult = { ok: true } | { ok: false; error: string };
@@ -91,7 +91,7 @@ export async function saveDayEdits(
   // The day's current plan rows (the only rows a source_id may point at).
   const { data: planRows } = await supabase
     .from("program_exercises")
-    .select("id, exercise_id, coach_note")
+    .select("id, exercise_id, coach_note, prescribed_sets, rep_scheme, suggested_load_value, suggested_load_type")
     .eq("user_id", user.id)
     .eq("program_day_id", programDayId);
   const planById = new Map((planRows ?? []).map((p) => [p.id as string, p]));
@@ -144,7 +144,59 @@ export async function saveDayEdits(
     return { ok: true };
   }
 
-  // From now on: update kept rows, add new ones, then remove the rest.
+  // From now on. First, any coach proposal still waiting for an OK that
+  // targets a row being swapped to another exercise or removed is dropped, so
+  // approving it later can never write old numbers onto a different exercise.
+  const kept0 = new Set<string>();
+  const swappedIds: string[] = [];
+  for (const it of items) {
+    if (!it.source_id || kept0.has(it.source_id)) continue;
+    kept0.add(it.source_id);
+    const src = planById.get(it.source_id);
+    if (src && (src.exercise_id as string) !== it.exercise_id) swappedIds.push(it.source_id);
+  }
+  const removedIds = Array.from(planById.keys()).filter((id) => !kept0.has(id));
+  const staleIds = [...swappedIds, ...removedIds];
+  if (staleIds.length) {
+    const { data: pending } = await supabase
+      .from("progression_proposals")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("program_id", status.program.id)
+      .eq("status", "pending");
+    const pendingIds = (pending ?? []).map((p) => p.id as string);
+    if (pendingIds.length) {
+      const { error } = await supabase
+        .from("proposal_items")
+        .delete()
+        .eq("user_id", user.id)
+        .in("proposal_id", pendingIds)
+        .in("program_exercise_id", staleIds);
+      if (error) {
+        console.error(`[saveDayEdits stale proposals] ${error.message}`);
+        return { ok: false, error: "Couldn't save your changes. Try again." };
+      }
+    }
+  }
+
+  // What changed, in plain words, for the coach's log (before the plan moves).
+  const nameIds = Array.from(new Set([...items.map((i) => i.exercise_id), ...(planRows ?? []).map((p) => p.exercise_id as string)]));
+  const { data: nameRows } = await supabase.from("exercises").select("id, name").eq("user_id", user.id).in("id", nameIds);
+  const nameOf = new Map((nameRows ?? []).map((e) => [e.id as string, e.name as string]));
+  const changeLines = describeDayEdit(
+    items,
+    (planRows ?? []).map((p) => ({
+      id: p.id as string,
+      exercise_id: p.exercise_id as string,
+      name: nameOf.get(p.exercise_id as string) ?? "Exercise",
+      prescribed_sets: (p.prescribed_sets as number | null) ?? null,
+      rep_scheme: (p.rep_scheme as string | null) ?? null,
+      suggested_load_value: p.suggested_load_value == null ? null : Number(p.suggested_load_value),
+      suggested_load_type: (p.suggested_load_type as LoadType | null) ?? null,
+    }))
+  );
+
+  // Then: update kept rows, add new ones, then remove the rest.
   const row = (it: DayItem, position: number) => {
     const reps = parseRepRange(it.rep_scheme);
     return {
@@ -209,6 +261,19 @@ export async function saveDayEdits(
     .eq("user_id", user.id)
     .eq("program_day_id", programDayId)
     .eq("week_started_on", status.weekStartedOn);
+
+  // Log it for the weekly review ("Dave changed the plan himself: …").
+  if (changeLines.length) {
+    const dayLabel = `Day ${day.day_index}${day.label ? ` (${day.label})` : ""}`;
+    const summary = `${dayLabel}: ${changeLines.join("; ")}`.replace(/[\r\n\t]+/g, " ");
+    const { error: logErr } = await supabase.from("program_edit_log").insert({
+      user_id: user.id,
+      program_id: status.program.id,
+      program_day_id: programDayId,
+      summary: summary.length > 300 ? `${summary.slice(0, 299).trimEnd()}…` : summary,
+    });
+    if (logErr) console.error(`[saveDayEdits log] ${logErr.message}`);
+  }
   return { ok: true };
 }
 

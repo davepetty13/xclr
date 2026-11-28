@@ -21,8 +21,14 @@ const USER_TABLES = [
   "pending_changes",
 ] as const;
 
-// Added in migration 008. Skipped (not fatal) if that migration hasn't run.
-const OPTIONAL_TABLES = ["health_daily", "health_workouts", "notification_prefs", "notifications"] as const;
+// Added in migrations 007 / 008. Skipped (not fatal) if they haven't run.
+const OPTIONAL_TABLES = [
+  "program_edit_log",
+  "health_daily",
+  "health_workouts",
+  "notification_prefs",
+  "notifications",
+] as const;
 
 // GET /profile/export — the signed-in user's own rows as a JSON download.
 export async function GET() {

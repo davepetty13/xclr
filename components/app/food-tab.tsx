@@ -86,7 +86,7 @@ export function FoodTab({
         <p className="mt-0.5 text-xs text-muted">{dateLabel}</p>
       </header>
 
-      {/* The one dark band: today's totals */}
+      {/* The one top band: today's totals */}
       <section aria-label="Today's food totals" className="band grid grid-cols-3">
         <div className="band-edge px-3.5 py-3">
           <p className="text-[11px] text-band-label">{left >= 0 ? "Left" : "Over"}</p>

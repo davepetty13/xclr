@@ -23,7 +23,7 @@ import {
   type ReviewContext,
   type ReviewExercise,
 } from "@/lib/review-prompt";
-import { healthAverages } from "@/lib/health";
+import { healthAverages, readShareWithCoach } from "@/lib/health";
 
 export type SimpleResult = { ok: true } | { ok: false; error: string };
 
@@ -114,7 +114,8 @@ export async function logSession(
   programDayId: string,
   type: string | null,
   sets: SetInput[],
-  myNote: string
+  myNote: string,
+  home = false // "At home today" was on: home loads, kept apart from gym sets
 ): Promise<{ ok: true; sessionId: string } | { ok: false; error: string }> {
   const supabase = createClient();
   const {
@@ -198,6 +199,7 @@ export async function logSession(
       type: sessionType,
       my_note: note || null,
       performed_at: new Date().toISOString(),
+      at_home: home === true,
     })
     .select("id")
     .single();
@@ -290,12 +292,14 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
   // The week's sessions (and their notes), then their sets.
   let sessQ = supabase
     .from("workout_sessions")
-    .select("id, my_note")
+    .select("id, my_note, at_home")
     .eq("user_id", user.id)
     .gte("performed_at", fromISO);
   if (toISO) sessQ = sessQ.lt("performed_at", toISO);
   const { data: sessRows } = await sessQ;
   const sessionIds = (sessRows ?? []).map((r) => r.id as string);
+  // Sessions logged with "At home today" on: their sets are listed apart.
+  const homeSessionIds = new Set((sessRows ?? []).filter((r) => r.at_home === true).map((r) => r.id as string));
 
   // Days skipped in the reviewed week (+ the user's reasons) — the coach weighs these.
   const { data: dayLabels } = await supabase
@@ -376,6 +380,7 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
     { load_value: number | null; reps: number | null; rpe: number | null }[]
   >();
   for (const s of setLogs ?? []) {
+    if (homeSessionIds.has(s.session_id as string)) continue; // home sets are listed apart
     const key = s.exercise_id as string;
     const list = actualsByEx.get(key) ?? [];
     list.push({
@@ -420,9 +425,22 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
   // swaps), so that work isn't invisible to the coach.
   const planExIds = new Set(progEx.map((pe) => pe.exercise_id as string));
   const otherByEx = new Map<string, { load_value: number | null; load_type: string | null; reps: number | null; rpe: number | null }[]>();
+  const homeByEx = new Map<string, { load_value: number | null; load_type: string | null; reps: number | null; rpe: number | null }[]>();
   for (const s of setLogs ?? []) {
     const exId = s.exercise_id as string;
-    if (planExIds.has(exId) || activityIds.has(s.session_id as string)) continue;
+    if (activityIds.has(s.session_id as string)) continue;
+    if (homeSessionIds.has(s.session_id as string)) {
+      const list = homeByEx.get(exId) ?? [];
+      list.push({
+        load_value: s.actual_load_value as number | null,
+        load_type: (s.actual_load_type as string | null) ?? null,
+        reps: s.actual_reps as number | null,
+        rpe: s.actual_rpe as number | null,
+      });
+      homeByEx.set(exId, list);
+      continue;
+    }
+    if (planExIds.has(exId)) continue;
     const list = otherByEx.get(exId) ?? [];
     list.push({
       load_value: s.actual_load_value as number | null,
@@ -433,6 +451,10 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
     otherByEx.set(exId, list);
   }
   const otherLogged = Array.from(otherByEx.entries()).map(([exId, actuals]) => ({
+    name: nameById.get(exId) ?? "Exercise",
+    actuals,
+  }));
+  const homeSessions = Array.from(homeByEx.entries()).map(([exId, actuals]) => ({
     name: nameById.get(exId) ?? "Exercise",
     actuals,
   }));
@@ -451,10 +473,46 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
   const sleepVals = (sleepRows ?? [])
     .map((s) => Number(s.duration_min))
     .filter((n) => Number.isFinite(n) && n > 0);
-  const activity = await healthAverages(supabase, user.id, fromDate, toDate ?? null);
+  // Watch / phone data goes to the coach only with "Share with my coach" on.
+  // Resting heart rate is never sent.
+  const { data: me } = await supabase
+    .from("profiles")
+    .select("display_name, health_sync_fields")
+    .eq("id", user.id)
+    .maybeSingle();
+  const shareHealth = readShareWithCoach(me?.health_sync_fields);
+  const activity = shareHealth ? await healthAverages(supabase, user.id, fromDate, toDate ?? null) : null;
   const avgSleep = sleepVals.length
     ? sleepVals.reduce((a, b) => a + b, 0) / sleepVals.length
     : activity?.avg_sleep_min ?? null;
+  let watchWorkouts: { kind: string; minutes: number | null; kcal: number | null }[] = [];
+  if (shareHealth) {
+    let wq = supabase
+      .from("health_workouts")
+      .select("kind, minutes, kcal")
+      .eq("user_id", user.id)
+      .gte("started_at", fromISO)
+      .order("started_at", { ascending: true })
+      .limit(30);
+    if (toISO) wq = wq.lt("started_at", toISO);
+    const { data: wRows } = await wq;
+    watchWorkouts = (wRows ?? []).map((w) => ({
+      kind: String(w.kind ?? "Workout"),
+      minutes: w.minutes == null ? null : Number(w.minutes),
+      kcal: w.kcal == null ? null : Number(w.kcal),
+    }));
+  }
+
+  // The user's own "From now on" plan edits in the last 7 days.
+  const { data: editLog } = await supabase
+    .from("program_edit_log")
+    .select("summary")
+    .eq("user_id", user.id)
+    .eq("program_id", program.id)
+    .gte("created_at", new Date(Date.now() - 7 * 86_400_000).toISOString())
+    .order("created_at", { ascending: true })
+    .limit(20);
+  const who = ((me?.display_name as string | null) ?? "").trim().split(/\s+/)[0] || "The user";
 
   const { data: weightRows } = await supabase
     .from("weights")
@@ -476,8 +534,11 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
     skipped,
     edited,
     home_days: (homeRows ?? []).length,
+    home_sessions: homeSessions,
     other_logged: otherLogged,
     activities,
+    watch_workouts: watchWorkouts,
+    own_edits: { who, lines: (editLog ?? []).map((e) => String(e.summary ?? "")).filter(Boolean) },
     avg_sleep_min: avgSleep,
     weight_trend: weightTrend,
     activity,
@@ -523,6 +584,8 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
         user_id: user.id,
         proposal_id: newId,
         program_exercise_id: progExId,
+        // The exercise the row holds now: approving checks it still does.
+        exercise_id: (progEx[it.ref]?.exercise_id as string | undefined) ?? null,
         field: it.field,
         // The CURRENT value always comes from the program, never the model.
         old_value: currentValue(progEx[it.ref] as Record<string, unknown> | undefined, it.field),
@@ -592,7 +655,7 @@ export async function applyProposal(
   // Load the proposal's items (RLS-scoped) so a client can't apply arbitrary rows.
   const { data: items } = await supabase
     .from("proposal_items")
-    .select("id, program_exercise_id, field, new_value")
+    .select("id, program_exercise_id, exercise_id, field, old_value, new_value")
     .eq("user_id", user.id)
     .eq("proposal_id", proposalId);
   if (!items) {
@@ -600,11 +663,37 @@ export async function applyProposal(
     return { ok: false, error: "That review is gone." };
   }
 
+  // The rows as they are NOW. An item only applies if its row still holds
+  // the exercise (and the value) the coach looked at — a swap or your own
+  // change since the review makes it out of date, and it's refused.
   const approved = new Set(approvedItemIds);
+  const wantedRows = Array.from(
+    new Set(items.filter((it) => approved.has(it.id as string)).map((it) => it.program_exercise_id as string))
+  );
+  const { data: liveRows } = wantedRows.length
+    ? await supabase
+        .from("program_exercises")
+        .select("id, exercise_id, prescribed_sets, rep_scheme, suggested_load_value, coach_note")
+        .eq("user_id", user.id)
+        .in("id", wantedRows)
+    : { data: [] as Record<string, unknown>[] };
+  const liveById = new Map((liveRows ?? []).map((r) => [r.id as string, r as Record<string, unknown>]));
+
   let appliedItems = 0;
   let failedItems = 0;
+  let staleItems = 0;
   for (const it of items) {
     if (!approved.has(it.id as string)) continue;
+    const live = liveById.get(it.program_exercise_id as string);
+    if (
+      !live ||
+      !it.exercise_id ||
+      live.exercise_id !== it.exercise_id ||
+      currentValue(live, it.field as string) !== ((it.old_value as string | null) ?? "")
+    ) {
+      staleItems++;
+      continue;
+    }
     const coerced = coerceFieldValue(
       it.field as ProposalField,
       it.new_value as string
@@ -635,6 +724,13 @@ export async function applyProposal(
     .eq("id", proposalId)
     .eq("user_id", user.id);
   if (decErr) return { ok: false, error: "Couldn't finalize the review." };
+  if (staleItems)
+    return {
+      ok: false,
+      error: `${appliedItems} change${appliedItems === 1 ? "" : "s"} saved. ${staleItems} ${
+        staleItems === 1 ? "was" : "were"
+      } skipped because you changed that exercise after the review.`,
+    };
 
   // Deciding a review never starts a week by itself: the user picks
   // Repeat or Fresh separately (decision 4). `startNextWeek` is ignored.

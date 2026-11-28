@@ -87,3 +87,38 @@ alter table workout_sessions add constraint workout_sessions_activity_shape chec
   and (effort is null or effort in ('easy', 'moderate', 'hard'))
   and (kcal is null or kcal between 0 and 10000)
 );
+
+-- ============================================================
+-- workout_sessions.at_home — the session was logged with "At home today" on.
+-- Home loads are lighter on purpose, so the review, share cards and progress
+-- charts never compare them with gym sessions as if they were a regression.
+-- ============================================================
+alter table workout_sessions add column if not exists at_home boolean not null default false;
+
+-- ============================================================
+-- program_edit_log — one line per "From now on" edit the user made to their
+-- own plan ("Day 2: swapped Bench press for Dumbbell floor press"). The weekly
+-- review reads the last 7 days so the coach doesn't quietly undo them.
+-- ============================================================
+create table if not exists program_edit_log (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  program_id uuid not null references programs(id) on delete cascade,
+  program_day_id uuid references program_days(id) on delete set null,
+  summary text not null check (char_length(summary) between 1 and 300),
+  created_at timestamptz not null default now()
+);
+alter table program_edit_log enable row level security;
+drop policy if exists "own program_edit_log" on program_edit_log;
+create policy "own program_edit_log" on program_edit_log for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+create index if not exists program_edit_log_user_time on program_edit_log (user_id, created_at desc);
+
+-- ============================================================
+-- proposal_items.exercise_id — which exercise the program row held when the
+-- coach proposed the change. Approving checks the row still holds it, so a
+-- swap made after the review can never receive the old exercise's numbers.
+-- (Covered by the existing "own proposal_items" policy.)
+-- ============================================================
+alter table proposal_items add column if not exists exercise_id uuid references exercises(id) on delete cascade;
+create index if not exists proposal_items_user_program_exercise on proposal_items (user_id, program_exercise_id);

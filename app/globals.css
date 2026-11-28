@@ -15,6 +15,7 @@
   --line: #ece7dc;
   --hairline: rgba(22, 33, 27, 0.08);
   --control-border: rgba(22, 33, 27, 0.12);
+  --switch-off: #78827a; /* off track: ≥3:1 against white and green-soft */
   --field: #f7f5f0;
   --segment: #f1eee7;
   --green: #1e7a4d; /* nutrition / intake / progress */

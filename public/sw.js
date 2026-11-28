@@ -1,6 +1,10 @@
 // Xclr service worker: shows Web Push reminders and opens the right screen
 // when one is tapped. No caching / offline logic on purpose.
 
+// An in-app path only: "/x", never "//host" or "/\host" (same rule as lib/safe-url.ts).
+const INTERNAL_PATH = /^\/(?![\/\\])/;
+const internal = (v) => typeof v === "string" && INTERNAL_PATH.test(v);
+
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
@@ -12,7 +16,7 @@ self.addEventListener("push", (event) => {
     data = { title: "Xclr", body: event.data ? event.data.text() : "" };
   }
   const title = typeof data.title === "string" && data.title ? data.title : "Xclr";
-  const url = typeof data.url === "string" && data.url.startsWith("/") ? data.url : "/";
+  const url = internal(data.url) ? data.url : "/";
   event.waitUntil(
     self.registration.showNotification(title, {
       body: typeof data.body === "string" ? data.body : "",
@@ -27,7 +31,7 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const path = (event.notification.data && event.notification.data.url) || "/";
-  const target = new URL(path.startsWith("/") ? path : "/", self.location.origin).href;
+  const target = new URL(internal(path) ? path : "/", self.location.origin).href;
   event.waitUntil(
     (async () => {
       const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });

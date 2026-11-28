@@ -8,6 +8,7 @@ import {
   sendTestPush,
 } from "@/app/(app)/profile/notifications/actions";
 import { QUIET_OPTIONS, TIME_OPTIONS, quietValue, type NotifyPrefs } from "@/lib/notify-prefs";
+import { Switch } from "@/components/app/switch";
 
 type BoolKey = "breakfast_on" | "lunch_on" | "dinner_on" | "calories_on" | "session_on" | "workout_reminder_on" | "review_on" | "nudges_on";
 type TimeKey = "breakfast_time" | "lunch_time" | "dinner_time" | "calories_time" | "session_time" | "workout_reminder_time";
@@ -31,25 +32,6 @@ function urlBase64ToUint8Array(base64: string): Uint8Array {
   const out = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
   return out;
-}
-
-function Switch({ on, label, onChange, disabled }: { on: boolean; label: string; onChange: (v: boolean) => void; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      disabled={disabled}
-      onClick={() => onChange(!on)}
-      className={`relative h-8 w-[52px] shrink-0 rounded-full transition-colors disabled:opacity-55 ${on ? "bg-green" : "bg-control-border"}`}
-    >
-      <span
-        aria-hidden
-        className={`absolute top-[3px] h-[26px] w-[26px] rounded-full bg-card shadow-card transition-[left] ${on ? "left-[23px]" : "left-[3px]"}`}
-      />
-    </button>
-  );
 }
 
 type PushState = "unknown" | "unsupported" | "needs-home" | "on" | "off" | "blocked";
@@ -98,12 +80,21 @@ export function NotifySettingsForm({
     };
   }, [initial.enabled]);
 
+  // Last settings the server confirmed, so a failed save can be undone on screen.
+  const savedRef = useRef(initial);
+
   async function save(next: NotifyPrefs) {
     setPrefs(next);
     const seq = ++saveSeq.current;
     const r = await saveNotifyPrefs(next).catch(() => ({ ok: false as const, error: "Couldn't save. Check your connection." }));
+    if (r.ok) savedRef.current = next;
     if (seq !== saveSeq.current) return;
-    setMsg(r.ok ? { text: "Saved" } : { text: r.error, bad: true });
+    if (r.ok) setMsg({ text: "Saved" });
+    else {
+      // Put the switch / time back to what's really saved.
+      setPrefs((p) => ({ ...savedRef.current, enabled: p.enabled }));
+      setMsg({ text: `${r.error} Your change was undone.`, bad: true });
+    }
   }
 
   async function turnOn() {
@@ -114,7 +105,7 @@ export function NotifySettingsForm({
     const permission = await Notification.requestPermission();
     if (permission !== "granted") {
       setPush(permission === "denied" ? "blocked" : "off");
-      setMsg({ text: "iPhone didn't allow notifications. You can still see every reminder in the bell.", bad: true });
+      setMsg({ text: "This phone didn't allow notifications. You can still see every reminder in the bell.", bad: true });
       return;
     }
     const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
@@ -133,7 +124,7 @@ export function NotifySettingsForm({
     }
     setPrefs((p) => ({ ...p, enabled: true }));
     setPush("on");
-    setMsg({ text: "On. Reminders come to this iPhone and the bell." });
+    setMsg({ text: "On. Reminders come to this phone and the bell." });
   }
 
   async function turnOff() {
@@ -153,7 +144,7 @@ export function NotifySettingsForm({
     }
     setPrefs((p) => ({ ...p, enabled: false }));
     setPush("off");
-    setMsg({ text: "Off on this iPhone. Reminders still land in the bell." });
+    setMsg({ text: "Off on this phone. Reminders still land in the bell." });
   }
 
   async function togglePush(on: boolean) {
@@ -187,9 +178,9 @@ export function NotifySettingsForm({
         : push === "unsupported"
           ? "This browser can't show notifications · the bell still works"
           : push === "blocked"
-            ? "Blocked in iPhone Settings → Notifications → Xclr"
+            ? "Blocked in this phone's Settings → Notifications → Xclr"
             : devices > 0
-              ? "Off on this iPhone · on for another device"
+              ? "Off on this phone · on for another device"
               : "Off · reminders still land in the bell";
   const canSwitch = pushReady && (push === "on" || push === "off");
 
@@ -224,13 +215,14 @@ export function NotifySettingsForm({
     <>
       <section className="flex items-center gap-2.5 rounded-tile bg-green-soft px-3.5 py-2.5">
         <div className="min-w-0 flex-1">
-          <p className="text-[15px] font-bold text-ink">Allow on this iPhone</p>
+          <p className="text-[15px] font-bold text-ink">Allow on this phone</p>
           <p className="text-[11px] text-muted">{pushLine}</p>
         </div>
         <Switch
           on={push === "on"}
           label="Allow notifications"
-          disabled={!canSwitch || busy}
+          disabled={!canSwitch}
+          busy={busy}
           onChange={(v) => void togglePush(v)}
         />
       </section>
@@ -278,7 +270,10 @@ export function NotifySettingsForm({
           ))}
         </select>
       </label>
-      <p className="-mt-1 px-1 text-xs text-muted">Nothing is sent in quiet hours. Each reminder only fires if it&apos;s still true.</p>
+      <p className="-mt-1 px-1 text-xs text-muted">
+        In quiet hours nothing buzzes your phone; reminders still land in the bell. Each one only fires if it&apos;s
+        still true.
+      </p>
 
       <p aria-live="polite" className="px-1 text-xs font-semibold empty:hidden">
         {msg ? <span className={msg.bad ? "text-ember-text" : "text-green"}>{msg.text}</span> : null}

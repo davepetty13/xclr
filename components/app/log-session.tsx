@@ -111,17 +111,14 @@ export function LogSession({
     }
   }, [draftKey, cells, note, active, editing, home]);
 
+  // Planned / suggested loads (incl. the home dumbbell cap) only ever show as
+  // a placeholder: a number is saved only if you typed it or tapped "Use …".
   const key = (peId: string, i: number) => `${peId}:${i}`;
-  const get = (peId: string, i: number, suggested: number | null): Cell =>
-    cells[key(peId, i)] ?? {
-      load: suggested != null ? String(suggested) : "",
-      reps: "",
-      rpe: "",
-    };
-  const set = (peId: string, i: number, patch: Partial<Cell>, suggested: number | null) =>
+  const get = (peId: string, i: number): Cell => cells[key(peId, i)] ?? { load: "", reps: "", rpe: "" };
+  const set = (peId: string, i: number, patch: Partial<Cell>) =>
     setCells((c) => ({
       ...c,
-      [key(peId, i)]: { ...get(peId, i, suggested), ...patch },
+      [key(peId, i)]: { ...get(peId, i), ...patch },
     }));
 
   async function finish() {
@@ -137,6 +134,8 @@ export function LogSession({
         const reps = c.reps.trim() === "" ? null : Math.round(Number(c.reps)) || null;
         const rpe = c.rpe.trim() === "" ? null : Number(c.rpe) || null;
         if (reps == null && load == null) continue;
+        // A timed set counts only with minutes in it (typed or "Use planned").
+        if (ex.suggested_load_type === "time_min" && load == null) continue;
         sets.push({
           exercise_id: ex.exerciseId,
           // Home swaps are recorded as the exercise actually performed.
@@ -152,7 +151,7 @@ export function LogSession({
     }
     let r: Awaited<ReturnType<typeof logSession>>;
     try {
-      r = await logSession(dayId, type, sets, note);
+      r = await logSession(dayId, type, sets, note, home);
     } catch {
       // Dropped connection / server error: nothing is confirmed, keep the draft.
       r = { ok: false, error: "Couldn't reach the server. Your sets are still here — try again." };
@@ -227,8 +226,12 @@ export function LogSession({
 
   const isLogged = (peId: string, i: number) => {
     const c = cells[key(peId, i)];
-    // Mirrors finish(): a set is sent once it has reps or a load.
-    return !!c && (c.reps.trim() !== "" || c.load.trim() !== "");
+    // Mirrors finish(): a set is sent once it has reps or a load — and a timed
+    // set only once it has minutes.
+    if (!c) return false;
+    const ex = exercises.find((e) => e.rowKey === peId);
+    if (ex?.suggested_load_type === "time_min") return c.load.trim() !== "";
+    return c.reps.trim() !== "" || c.load.trim() !== "";
   };
   const loggedCount = (ex: LogExercise) => {
     const count = Math.max(1, ex.prescribed_sets ?? 1);
@@ -276,8 +279,14 @@ export function LogSession({
   );
 
   const editRow = (i: number) => {
-    const c = get(ex.rowKey, i, ex.suggested_load_value);
+    const c = get(ex.rowKey, i);
     const unit = loadUnitLabel(ex.suggested_load_type);
+    const timed = ex.suggested_load_type === "time_min";
+    const planned = ex.suggested_load_value;
+    const plannedLabel = planned != null ? (timed ? `${planned} min` : `${planned} ${unit}`) : null;
+    const loadEmpty = c.load.trim() === "";
+    // A timed set needs minutes: typed, or the planned ones via the button.
+    const needsMinutes = timed && loadEmpty;
     return (
       <div className="flex flex-col gap-2 rounded-tile bg-field p-3">
         <p className="text-xs font-bold text-ink">Set {i + 1}</p>
@@ -288,10 +297,9 @@ export function LogSession({
               className={fieldCls}
               inputMode="decimal"
               value={c.load}
-              onChange={(e) =>
-                set(ex.rowKey, i, { load: e.target.value }, ex.suggested_load_value)
-              }
-              aria-label={`${ex.name} set ${i + 1} load`}
+              placeholder={planned != null ? String(planned) : undefined}
+              onChange={(e) => set(ex.rowKey, i, { load: e.target.value })}
+              aria-label={`${ex.name} set ${i + 1} ${timed ? "minutes" : "load"}`}
             />
           </label>
           <label className="flex flex-col gap-1 text-[11px] font-semibold text-muted">
@@ -300,9 +308,7 @@ export function LogSession({
               className={fieldCls}
               inputMode="numeric"
               value={c.reps}
-              onChange={(e) =>
-                set(ex.rowKey, i, { reps: e.target.value }, ex.suggested_load_value)
-              }
+              onChange={(e) => set(ex.rowKey, i, { reps: e.target.value })}
               aria-label={`${ex.name} set ${i + 1} reps`}
             />
           </label>
@@ -312,23 +318,28 @@ export function LogSession({
               className={fieldCls}
               inputMode="decimal"
               value={c.rpe}
-              onChange={(e) =>
-                set(ex.rowKey, i, { rpe: e.target.value }, ex.suggested_load_value)
-              }
+              onChange={(e) => set(ex.rowKey, i, { rpe: e.target.value })}
               aria-label={`${ex.name} set ${i + 1} RPE`}
             />
           </label>
         </div>
+        {loadEmpty && plannedLabel ? (
+          <button
+            type="button"
+            onClick={() => set(ex.rowKey, i, { load: String(planned) })}
+            className="btn-secondary w-full text-[13px]"
+          >
+            Use planned {plannedLabel}
+          </button>
+        ) : null}
+        {needsMinutes ? (
+          <p className="text-[11px] text-muted">Type the minutes you did{plannedLabel ? `, or use the planned ${plannedLabel}` : ""}.</p>
+        ) : null}
         <button
           type="button"
-          onClick={() => {
-            // Minutes come prefilled for an activity / timed item: "Done"
-            // counts that set even if nothing was retyped.
-            if (ex.suggested_load_type === "time_min" && !cells[key(ex.rowKey, i)] && ex.suggested_load_value != null)
-              set(ex.rowKey, i, {}, ex.suggested_load_value);
-            setEditing(null);
-          }}
-          className="btn-primary btn-primary-green w-full text-[13px]"
+          disabled={needsMinutes}
+          onClick={() => setEditing(null)}
+          className="btn-primary btn-primary-green w-full text-[13px] disabled:opacity-55"
         >
           Done with set {i + 1}
         </button>

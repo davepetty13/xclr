@@ -1,6 +1,7 @@
 import "server-only";
 import webpush from "web-push";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isInternalPath, isKnownPushEndpoint } from "@/lib/safe-url";
 
 // Web Push (free; works on iPhone 16.4+ when Xclr is opened from the Home
 // Screen icon). Keys come from env only. With no keys, push is simply off:
@@ -55,11 +56,12 @@ export async function pushToUser(admin: Supa, userId: string, msg: PushMessage):
   const payload = JSON.stringify({
     title: msg.title,
     body: msg.body ?? "",
-    url: msg.url && msg.url.startsWith("/") ? msg.url : "/",
+    url: isInternalPath(msg.url) ? msg.url : "/",
     tag: msg.tag,
   });
   let ok = 0;
   for (const s of subs as SubRow[]) {
+    if (!isKnownPushEndpoint(s.endpoint)) continue; // only real push services
     try {
       await webpush.sendNotification(
         { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
@@ -67,7 +69,11 @@ export async function pushToUser(admin: Supa, userId: string, msg: PushMessage):
         { TTL: 4 * 3600, urgency: "normal" }
       );
       ok++;
-      await admin.from("push_subscriptions").update({ last_ok_at: new Date().toISOString() }).eq("id", s.id);
+      await admin
+        .from("push_subscriptions")
+        .update({ last_ok_at: new Date().toISOString() })
+        .eq("id", s.id)
+        .eq("user_id", userId);
     } catch (err) {
       const code = (err as { statusCode?: number }).statusCode;
       if (code === 404 || code === 410) {

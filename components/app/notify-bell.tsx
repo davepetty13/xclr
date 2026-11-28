@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { markNotificationsRead, runNotificationAction } from "@/app/(app)/profile/notifications/actions";
 import { MEAL_KINDS, TRAINING_KINDS } from "@/lib/notify-prefs";
+import { useFocusTrap } from "@/components/app/a11y";
+import { isInternalPath } from "@/lib/safe-url";
 
 export type InboxItem = {
   id: string;
@@ -36,21 +38,32 @@ export function NotifyBell({ items: initial }: { items: InboxItem[] }) {
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const bellRef = useRef<HTMLButtonElement>(null);
+  const sheetRef = useRef<HTMLElement>(null);
+  const listId = useId();
 
   useEffect(() => setItems(initial), [initial]);
 
+  const close = useCallback(() => {
+    setOpen(false);
+    bellRef.current?.focus();
+  }, []);
+
+  // Focus in, Escape closes (focus back on the bell), no page scroll behind.
   useEffect(() => {
     if (!open) return;
     closeRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
-
-  function close() {
-    setOpen(false);
-    bellRef.current?.focus();
-  }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    document.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open, close]);
+  useFocusTrap(sheetRef, open);
 
   const unread = items.filter((i) => i.unread).length;
   const shown = items.filter((i) =>
@@ -74,7 +87,7 @@ export function NotifyBell({ items: initial }: { items: InboxItem[] }) {
       void markNotificationsRead([i.id]).catch(() => null);
     }
     setOpen(false);
-    if (i.url) router.push(i.url);
+    if (isInternalPath(i.url)) router.push(i.url);
   }
 
   async function act(i: InboxItem) {
@@ -85,9 +98,12 @@ export function NotifyBell({ items: initial }: { items: InboxItem[] }) {
       const r = await runNotificationAction(i.id);
       if (r.ok) {
         markLocal([i.id]);
-        setMsg({ text: "Logged." });
+        setMsg({ text: r.message });
         router.refresh();
-      } else setMsg({ text: r.error, bad: true });
+      } else {
+        markLocal([i.id]);
+        setMsg({ text: r.error, bad: true });
+      }
     } catch {
       setMsg({ text: "That didn't go through. Check your connection and try again.", bad: true });
     } finally {
@@ -120,6 +136,7 @@ export function NotifyBell({ items: initial }: { items: InboxItem[] }) {
             <>
               <div aria-hidden="true" onClick={close} className="fixed inset-0 z-30 bg-scrim" />
               <section
+                ref={sheetRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="inbox-h"
@@ -157,6 +174,7 @@ export function NotifyBell({ items: initial }: { items: InboxItem[] }) {
                       type="button"
                       role="tab"
                       aria-selected={tab === t.key}
+                      aria-controls={listId}
                       onClick={() => setTab(t.key)}
                       className="tab"
                     >
@@ -167,21 +185,24 @@ export function NotifyBell({ items: initial }: { items: InboxItem[] }) {
                 </div>
 
                 {shown.length === 0 ? (
-                  <p className="py-6 text-center text-sm text-muted">
-                    {items.length ? "Nothing here." : "No reminders yet. They show up here, even if iPhone notifications are off."}
+                  <p id={listId} className="py-6 text-center text-sm text-muted">
+                    {items.length ? "Nothing here." : "No reminders yet. They show up here, even if phone notifications are off."}
                   </p>
                 ) : (
-                  <ul className="flex flex-col">
+                  <ul id={listId} className="flex flex-col">
                     {shown.map((i) => (
                       <li key={i.id} className="flex gap-2.5 border-b border-hairline py-2.5 last:border-b-0">
                         <span
-                          aria-label={i.unread ? "New" : undefined}
+                          aria-hidden="true"
                           className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${i.unread ? "bg-ember-text" : "bg-transparent"}`}
                         />
                         <div className="min-w-0 flex-1">
                           <button type="button" onClick={() => openItem(i)} className="block w-full min-h-10 text-left">
                             <span className="flex items-baseline justify-between gap-2">
-                              <span className={`text-sm text-ink ${i.unread ? "font-bold" : "font-semibold"}`}>{i.title}</span>
+                              <span className={`text-sm text-ink ${i.unread ? "font-bold" : "font-semibold"}`}>
+                                {i.unread ? <span className="sr-only">New: </span> : null}
+                                {i.title}
+                              </span>
                               <span className="tnum shrink-0 text-[11px] text-muted">{i.when}</span>
                             </span>
                             {i.body ? <span className="mt-0.5 block text-[13px] text-muted">{i.body}</span> : null}

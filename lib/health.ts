@@ -19,6 +19,14 @@ export const DEFAULT_HEALTH_FIELDS: HealthFields = {
   resting_hr: true,
 };
 
+// "Share with my coach": weekly averages and Watch workouts go into the
+// weekly review only when this is on (resting heart rate never does). Stored
+// in profiles.health_sync_fields.share_with_coach; missing = off, and making
+// the first sync link switches it on.
+export function readShareWithCoach(v: unknown): boolean {
+  return !!v && typeof v === "object" && !Array.isArray(v) && (v as Record<string, unknown>).share_with_coach === true;
+}
+
 export function readHealthFields(v: unknown): HealthFields {
   const out = { ...DEFAULT_HEALTH_FIELDS };
   if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -102,25 +110,23 @@ function weightField(v: unknown): Field<number> {
   return inRange(kg, LIMITS.weight) ? { ok: true, value: kg } : { ok: false };
 }
 
-// Sleep: sleep_minutes, or sleep_hours. Shortcuts durations often come in
-// seconds, so a "minutes" value over a day but under 24 h in seconds is read
-// as seconds.
+// Sleep: exactly one unit per field, never guessed from the size of the
+// number. sleep_minutes (minutes), sleep_hours (hours, decimals ok) or
+// sleep_seconds (seconds — what Shortcuts durations usually are). A unit word
+// is allowed only if it matches the field ("420 min", "7.5 h", "25200 s").
+const SLEEP_UNITS: { key: string; per: number; words: RegExp }[] = [
+  { key: "sleep_minutes", per: 1, words: /^(|m|min|mins|minute|minutes)$/ },
+  { key: "sleep_hours", per: 60, words: /^(|h|hr|hrs|hour|hours)$/ },
+  { key: "sleep_seconds", per: 1 / 60, words: /^(|s|sec|secs|second|seconds)$/ },
+];
+
 function sleepField(row: Record<string, unknown>): Field<number> {
-  const rawMin = row.sleep_minutes ?? row.sleep_min;
-  if (rawMin !== undefined && rawMin !== null && rawMin !== "") {
-    const p = num(rawMin);
-    if (!p) return { ok: false };
-    let n = p.n;
-    if (p.unit.startsWith("h")) n = n * 60;
-    else if (p.unit.startsWith("s") || (n > 1440 && n <= 86_400)) n = n / 60;
-    n = Math.round(n);
-    return inRange(n, LIMITS.sleep) ? { ok: true, value: n } : { ok: false };
-  }
-  const rawH = row.sleep_hours;
-  if (rawH !== undefined && rawH !== null && rawH !== "") {
-    const p = num(rawH);
-    if (!p) return { ok: false };
-    const n = Math.round(p.n * 60);
+  for (const u of SLEEP_UNITS) {
+    const raw = row[u.key];
+    if (raw === undefined || raw === null || raw === "") continue;
+    const p = num(raw);
+    if (!p || !u.words.test(p.unit)) return { ok: false };
+    const n = Math.round(p.n * u.per);
     return inRange(n, LIMITS.sleep) ? { ok: true, value: n } : { ok: false };
   }
   return { ok: true, value: undefined };
@@ -162,7 +168,7 @@ function parseDay(row: unknown, today: string): DayIn | string {
   if (!steps.ok) return "Steps must be a number from 0 to 200,000.";
   if (!active.ok) return "Active calories must be a number from 0 to 20,000.";
   if (!hr.ok) return "Resting heart rate must be from 20 to 250.";
-  if (!sleep.ok) return "Sleep must be from 0 to 24 hours.";
+  if (!sleep.ok) return "Sleep must be 0 to 24 hours, sent as sleep_minutes, sleep_hours or sleep_seconds.";
   if (!weight.ok) return "Weight must be from 20 to 400 kg.";
   return {
     date,

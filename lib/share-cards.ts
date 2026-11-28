@@ -324,12 +324,12 @@ function fitHeadline(
       return { size, lines };
     }
   }
-  // Too long for maxLines even at the minimum size: keep every word (one more
-  // line; the list below makes room). Ellipsis only for a word that can't fit.
+  // Too long for maxLines even at the minimum size: keep every word (extra
+  // lines; the list below makes room). The only ellipsis left is on a single
+  // word too wide for the card on its own, and only on that word.
   const st = { ...s, size: o.min };
-  const all = wrapTokens(p, headlineTokens(str, false), st, o.maxW);
-  if (all && all.length <= o.maxLines + 1) return { size: o.min, lines: all };
-  return { size: o.min, lines: wrap(p, str, st, o.maxW, o.maxLines + 1) };
+  const words = headlineTokens(str, false).map((w) => (measure(p, w, st) > o.maxW ? ellipsize(p, w, st, o.maxW) : w));
+  return { size: o.min, lines: wrapTokens(p, words, st, o.maxW) ?? words };
 }
 
 function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: number) {
@@ -554,10 +554,15 @@ function sessionHeadline(p: Pen, top: string, bottom: string | null, y: number):
   const hs: TextStyle = { size: 76, weight: 800, face: "display", color: p.t.text, track: -0.05 };
   const LH = 0.9;
   if (!bottom) {
-    const size = fitSize(p, [top], hs, 76, 34, CONTENT_W);
-    const s = { ...hs, size };
-    text(p, ellipsize(p, top, s, CONTENT_W), PAD_X, bl(y, size, LH), s);
-    return y + size * LH;
+    // No day label (e.g. "STRENGTH SESSION"): the title itself wraps and
+    // shrinks the same way, instead of being cut off.
+    const fit = fitHeadline(p, top, hs, { max: 76, min: 30, maxW: CONTENT_W, maxLines: 3, maxH: 168, lh: LH });
+    const s = { ...hs, size: fit.size };
+    for (const l of fit.lines) {
+      text(p, l, PAD_X, bl(y, fit.size, LH), s);
+      y += fit.size * LH;
+    }
+    return y;
   }
   const fit = fitHeadline(p, bottom, hs, {
     max: 76,
@@ -1163,7 +1168,8 @@ function photoLayout(p: Pen, b: PhotoBlock, o: DrawOptions) {
 
 function sessionPhoto(p: Pen, d: SessionCardData, o: DrawOptions) {
   const dayWord = d.titleBottom ? d.titleTop.charAt(0) + d.titleTop.slice(1).toLowerCase() : null;
-  const detail = [dayWord, d.week != null ? `Week ${d.week}` : null].filter(Boolean).join(" · ");
+  // "Day 4 · Week 3 · Lose fat" (subline already holds week + goal).
+  const detail = [dayWord, d.subline ?? (d.week != null ? `Week ${d.week}` : null)].filter(Boolean).join(" · ");
   photoLayout(
     p,
     {

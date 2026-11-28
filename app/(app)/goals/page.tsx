@@ -77,7 +77,7 @@ export default async function GoalsPage() {
         </div>
       </header>
 
-      {/* The one dark band: where your weight is vs the goal */}
+      {/* The one top band: where your weight is vs the goal */}
       <section aria-label="Weight goal" className="band grid grid-cols-3">
         <div className="band-edge px-3.5 py-3">
           <p className="text-[11px] text-band-label">Now</p>

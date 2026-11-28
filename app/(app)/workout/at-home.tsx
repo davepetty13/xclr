@@ -6,6 +6,7 @@ import { saveHomeEquipment, setAtHomeToday } from "./edit-actions";
 import { describeEquipment, homeSwapFor, type HomeEquipment } from "@/lib/home-swaps";
 import type { DayItem } from "@/lib/day-edits";
 import { ErrorLine, Sheet } from "./sheet";
+import { Switch } from "@/components/app/switch";
 
 const DB_OPTIONS = [2, 3, 4, 5, 6, 8, 10, 12, 15, 17.5, 20, 22.5, 24, 30, 40];
 const KB_OPTIONS = [4, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32];
@@ -45,6 +46,7 @@ export function AtHome({
   const isOn = pending ?? on;
 
   async function toggle() {
+    if (busy) return; // a save is running (aria-busy on the switch)
     const next = !isOn;
     setPending(next);
     setBusy(true);
@@ -76,26 +78,7 @@ export function AtHome({
           <HouseIcon />
           <span className="text-[15px] font-bold text-ink">At home today</span>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={isOn}
-          aria-label="At home today"
-          disabled={busy}
-          onClick={() => void toggle()}
-          className="flex min-h-[44px] w-[60px] items-center justify-center"
-        >
-          <span
-            aria-hidden
-            className={`relative h-8 w-[52px] rounded-full transition-colors ${isOn ? "bg-green" : "bg-control-border"}`}
-          >
-            <span
-              className={`absolute top-[3px] h-[26px] w-[26px] rounded-full bg-card shadow-card transition-all ${
-                isOn ? "left-[23px]" : "left-[3px]"
-              }`}
-            />
-          </span>
-        </button>
+        <Switch on={isOn} label="At home today" busy={busy} onChange={() => void toggle()} />
       </div>
       <p className="text-xs text-ink">
         Using: {describeEquipment(equipment)} ·{" "}
