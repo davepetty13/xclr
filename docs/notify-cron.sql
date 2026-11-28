@@ -1,26 +1,18 @@
--- Xclr reminders: run every 15 minutes from Supabase (pg_cron + pg_net).
--- Vercel Hobby crons only run once a day, so Supabase calls the endpoint.
---
--- 1. Run supabase/migrations/008_health_notify.sql first.
--- 2. Replace <CRON_SECRET> below with the SAME value as CRON_SECRET in Vercel.
---    Paste the edited copy into the Supabase SQL editor; never commit the real
---    secret to this file.
--- 3. Run it once. Check runs later with:
---      select * from cron.job_run_details order by start_time desc limit 10;
---      select * from net._http_response order by created desc limit 10;
+-- Xclr reminder schedule (Supabase pg_cron + pg_net), every 15 minutes.
+-- Vercel Hobby crons only run daily, so Supabase calls the endpoint instead.
+-- The secret lives in Supabase Vault (never in this file or in cron.job):
+--   select vault.create_secret('<same value as Vercel CRON_SECRET>', 'xclr_cron_secret');
+-- If CRON_SECRET is changed in Vercel, update the vault secret to match:
+--   select vault.update_secret((select id from vault.secrets where name = 'xclr_cron_secret'), '<new value>');
 
 create extension if not exists pg_cron;
-create extension if not exists pg_net;
+create extension if not exists pg_net with schema extensions;
 
-select cron.schedule(
-  'xclr-notify',
-  '*/15 * * * *',
-  $$ select net.http_post(
-       url := 'https://xclr.vercel.app/api/cron/notify',
-       headers := jsonb_build_object('Authorization', 'Bearer <CRON_SECRET>'),
-       timeout_milliseconds := 30000
-     ) $$
-);
+select cron.schedule('xclr-notify', '*/15 * * * *', $$
+  select net.http_post(
+    url := 'https://xclr.vercel.app/api/cron/notify',
+    headers := jsonb_build_object('Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'xclr_cron_secret')),
+    timeout_milliseconds := 30000)
+$$);
 
--- To change the secret later: unschedule, then run the schedule again.
--- select cron.unschedule('xclr-notify');
+-- To stop it:  select cron.unschedule('xclr-notify');
