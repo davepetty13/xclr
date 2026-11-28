@@ -9,9 +9,17 @@ import { ShareSheet } from "@/components/app/share-sheet";
 import type { ShareBundle } from "@/lib/share-cards";
 
 export type LogExercise = {
-  programExerciseId: string;
-  exerciseId: string;
+  // Row key for this day's list: the program_exercise id, a "This week only"
+  // row id, or "home:<id>" for a home swap — so gym and home sets typed for
+  // the same slot stay apart in the draft.
+  rowKey: string;
+  exerciseId: string; // "" = found / added by name when the session is saved
   name: string;
+  category: string | null;
+  activity?: boolean; // extra activity (minutes only)
+  homeFor?: string | null; // gym exercise this home version stands in for
+  homeTip?: string | null;
+  subline?: string | null; // short muted line ("Same as gym", "Added this week")
   prescribed_sets: number | null;
   rep_scheme: string | null;
   suggested_load_value: number | null;
@@ -28,11 +36,13 @@ export function LogSession({
   dayId,
   type,
   exercises,
+  home = false,
 }: {
   userId: string;
   dayId: string;
   type: string | null;
   exercises: LogExercise[];
+  home?: boolean; // "At home today" is on (saved in the draft too)
 }) {
   const router = useRouter();
   const [cells, setCells] = useState<Record<string, Cell>>({});
@@ -93,11 +103,13 @@ export function LogSession({
       return;
     }
     try {
-      localStorage.setItem(draftKey, JSON.stringify({ cells, note, active, editing }));
+      // Cells are keyed by row (home rows are "home:…"), so switching At home
+      // on/off or editing the day keeps every typed set; `home` records the mode.
+      localStorage.setItem(draftKey, JSON.stringify({ cells, note, active, editing, home }));
     } catch {
       // storage unavailable/full — non-fatal
     }
-  }, [draftKey, cells, note, active, editing]);
+  }, [draftKey, cells, note, active, editing, home]);
 
   const key = (peId: string, i: number) => `${peId}:${i}`;
   const get = (peId: string, i: number, suggested: number | null): Cell =>
@@ -119,7 +131,7 @@ export function LogSession({
     for (const ex of exercises) {
       const count = Math.max(1, ex.prescribed_sets ?? 1);
       for (let i = 0; i < count; i++) {
-        const c = cells[key(ex.programExerciseId, i)];
+        const c = cells[key(ex.rowKey, i)];
         if (!c) continue;
         const load = c.load.trim() === "" ? null : Number(c.load) || null;
         const reps = c.reps.trim() === "" ? null : Math.round(Number(c.reps)) || null;
@@ -127,6 +139,9 @@ export function LogSession({
         if (reps == null && load == null) continue;
         sets.push({
           exercise_id: ex.exerciseId,
+          // Home swaps are recorded as the exercise actually performed.
+          exercise_name: ex.exerciseId ? null : ex.name,
+          category: ex.exerciseId ? null : ex.category,
           set_index: i + 1,
           load_value: load,
           load_type: ex.suggested_load_type,
@@ -218,7 +233,7 @@ export function LogSession({
   const loggedCount = (ex: LogExercise) => {
     const count = Math.max(1, ex.prescribed_sets ?? 1);
     let n = 0;
-    for (let i = 0; i < count; i++) if (isLogged(ex.programExerciseId, i)) n++;
+    for (let i = 0; i < count; i++) if (isLogged(ex.rowKey, i)) n++;
     return n;
   };
 
@@ -257,11 +272,11 @@ export function LogSession({
   const ex = exercises[activeIdx];
   const count = Math.max(1, ex.prescribed_sets ?? 1);
   const nextEmpty = Array.from({ length: count }).findIndex(
-    (_, i) => !isLogged(ex.programExerciseId, i)
+    (_, i) => !isLogged(ex.rowKey, i)
   );
 
   const editRow = (i: number) => {
-    const c = get(ex.programExerciseId, i, ex.suggested_load_value);
+    const c = get(ex.rowKey, i, ex.suggested_load_value);
     const unit = loadUnitLabel(ex.suggested_load_type);
     return (
       <div className="flex flex-col gap-2 rounded-tile bg-field p-3">
@@ -274,7 +289,7 @@ export function LogSession({
               inputMode="decimal"
               value={c.load}
               onChange={(e) =>
-                set(ex.programExerciseId, i, { load: e.target.value }, ex.suggested_load_value)
+                set(ex.rowKey, i, { load: e.target.value }, ex.suggested_load_value)
               }
               aria-label={`${ex.name} set ${i + 1} load`}
             />
@@ -286,7 +301,7 @@ export function LogSession({
               inputMode="numeric"
               value={c.reps}
               onChange={(e) =>
-                set(ex.programExerciseId, i, { reps: e.target.value }, ex.suggested_load_value)
+                set(ex.rowKey, i, { reps: e.target.value }, ex.suggested_load_value)
               }
               aria-label={`${ex.name} set ${i + 1} reps`}
             />
@@ -298,7 +313,7 @@ export function LogSession({
               inputMode="decimal"
               value={c.rpe}
               onChange={(e) =>
-                set(ex.programExerciseId, i, { rpe: e.target.value }, ex.suggested_load_value)
+                set(ex.rowKey, i, { rpe: e.target.value }, ex.suggested_load_value)
               }
               aria-label={`${ex.name} set ${i + 1} RPE`}
             />
@@ -306,7 +321,13 @@ export function LogSession({
         </div>
         <button
           type="button"
-          onClick={() => setEditing(null)}
+          onClick={() => {
+            // Minutes come prefilled for an activity / timed item: "Done"
+            // counts that set even if nothing was retyped.
+            if (ex.suggested_load_type === "time_min" && !cells[key(ex.rowKey, i)] && ex.suggested_load_value != null)
+              set(ex.rowKey, i, {}, ex.suggested_load_value);
+            setEditing(null);
+          }}
           className="btn-primary btn-primary-green w-full text-[13px]"
         >
           Done with set {i + 1}
@@ -330,14 +351,22 @@ export function LogSession({
           <h3 className="text-[15px] font-bold text-ink">{ex.name}</h3>
           <p className="tnum text-[13px] text-muted">{prescription(ex)}</p>
         </div>
+        {ex.homeFor ? (
+          <p className="text-xs text-muted">
+            Home swap for <strong className="font-bold text-ink">{ex.homeFor}</strong>
+            {ex.homeTip ? ` · ${ex.homeTip}` : ""}
+          </p>
+        ) : ex.subline ? (
+          <p className="text-xs text-muted">{ex.subline}</p>
+        ) : null}
         {ex.coach_note ? (
           <p className="text-xs font-medium text-green">Coach: {ex.coach_note}</p>
         ) : null}
 
         <div className="flex flex-wrap gap-1.5">
           {Array.from({ length: count }).map((_, i) => {
-            if (!isLogged(ex.programExerciseId, i) || editing === i) return null;
-            const c = cells[key(ex.programExerciseId, i)];
+            if (!isLogged(ex.rowKey, i) || editing === i) return null;
+            const c = cells[key(ex.rowKey, i)];
             const unit = loadUnitLabel(ex.suggested_load_type);
             const load = c.load.trim() !== "" ? `${c.load.trim()} ${unit}` : "";
             return (
@@ -375,7 +404,7 @@ export function LogSession({
               const total = Math.max(1, e.prescribed_sets ?? 1);
               return (
                 <li
-                  key={e.programExerciseId}
+                  key={e.rowKey}
                   className={n < others.length - 1 ? "border-b border-hairline" : ""}
                 >
                   <button
@@ -386,11 +415,18 @@ export function LogSession({
                     }}
                     className="flex min-h-[46px] w-full items-center justify-between gap-3 py-2 text-left"
                   >
-                    <span className="flex items-center gap-2 text-sm font-semibold text-ink">
-                      {e.name}
-                      {logged > 0 ? (
-                        <span className="mark mark-green tnum">
-                          {logged}/{total}
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2 text-sm font-semibold text-ink">
+                        {e.name}
+                        {logged > 0 ? (
+                          <span className="mark mark-green tnum">
+                            {logged}/{total}
+                          </span>
+                        ) : null}
+                      </span>
+                      {e.homeFor || e.subline ? (
+                        <span className="block text-[11px] text-muted">
+                          {e.homeFor ? `Swap for ${e.homeFor}` : e.subline}
                         </span>
                       ) : null}
                     </span>

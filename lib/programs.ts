@@ -1,5 +1,8 @@
 import type { createClient } from "@/lib/supabase/server";
 import { addDays, localDate, localDayStartISO, todayLocal } from "@/lib/time";
+import { parseDayEdits, type DayItem } from "@/lib/day-edits";
+import { asCategory, guessCategory } from "@/lib/home-swaps";
+import type { LoadType } from "@/lib/program-schema";
 
 type Supa = ReturnType<typeof createClient>;
 
@@ -207,4 +210,75 @@ export async function getWeekStatus(
     weekEnded,
     shortWeek: planned.length < trainingBase.length,
   };
+}
+
+// ── One day's exercise list for this week ──────────────────────────────────
+// The program's prescription, unless a "This week only" edit (day_edits) exists
+// for this day + week — then that full replacement list wins. The Train page
+// (and so logging) reads through here.
+
+export type DayPlan = {
+  items: DayItem[]; // what to do this week
+  plan: DayItem[]; // the program's own list (no week edit applied)
+  weekEdit: boolean; // items came from a "This week only" edit
+};
+
+export async function getDayPlan(
+  supabase: Supa,
+  userId: string,
+  programId: string,
+  dayId: string,
+  weekStartedOn: string
+): Promise<DayPlan> {
+  const [{ data: pe }, { data: exRows }, { data: edit }] = await Promise.all([
+    supabase
+      .from("program_exercises")
+      .select(
+        "id, exercise_id, position, prescribed_sets, rep_scheme, suggested_load_value, suggested_load_type, target_rpe_low, target_rpe_high, coach_note"
+      )
+      .eq("user_id", userId)
+      .eq("program_day_id", dayId)
+      .order("position", { ascending: true }),
+    supabase.from("exercises").select("id, name, category").eq("user_id", userId),
+    supabase
+      .from("day_edits")
+      .select("edits")
+      .eq("user_id", userId)
+      .eq("program_id", programId)
+      .eq("program_day_id", dayId)
+      .eq("week_started_on", weekStartedOn)
+      .maybeSingle(),
+  ]);
+  const exById = new Map<string, { name: string; category: string | null }>();
+  for (const e of exRows ?? [])
+    exById.set(e.id as string, { name: e.name as string, category: (e.category as string | null) ?? null });
+
+  const plan: DayItem[] = (pe ?? []).map((p) => {
+    const ex = exById.get(p.exercise_id as string);
+    const name = ex?.name ?? "Exercise";
+    return {
+      key: p.id as string,
+      source_id: p.id as string,
+      exercise_id: p.exercise_id as string,
+      name,
+      category: asCategory(ex?.category) ?? guessCategory(name),
+      activity: false,
+      prescribed_sets: (p.prescribed_sets as number | null) ?? null,
+      rep_scheme: (p.rep_scheme as string | null) ?? null,
+      suggested_load_value: p.suggested_load_value == null ? null : Number(p.suggested_load_value),
+      suggested_load_type: (p.suggested_load_type as LoadType | null) ?? null,
+      target_rpe_low: p.target_rpe_low == null ? null : Number(p.target_rpe_low),
+      target_rpe_high: p.target_rpe_high == null ? null : Number(p.target_rpe_high),
+      coach_note: (p.coach_note as string | null) ?? null,
+      swapped_from: null,
+    };
+  });
+
+  if (!edit) return { items: plan, plan, weekEdit: false };
+  // Prefer the exercise's current name (it may have been renamed since).
+  const items = parseDayEdits(edit.edits).map((it) => {
+    const ex = exById.get(it.exercise_id);
+    return ex ? { ...it, name: ex.name } : it;
+  });
+  return { items, plan, weekEdit: true };
 }

@@ -30,6 +30,23 @@ export default async function WorkoutHistoryPage() {
     .from("exercises")
     .select("id, name")
     .eq("user_id", user.id);
+  // Extra activities (+ Add activity): minutes / effort / kcal live on the
+  // session. Fetched apart so History still loads if migration 007 is missing.
+  const activityIds = sessionList.filter((s) => s.type === "activity").map((s) => s.id as string);
+  const activityInfo = new Map<string, { minutes: number | null; effort: string | null; kcal: number | null }>();
+  if (activityIds.length) {
+    const { data: actRows } = await supabase
+      .from("workout_sessions")
+      .select("id, duration_min, effort, kcal")
+      .eq("user_id", user.id)
+      .in("id", activityIds);
+    for (const a of actRows ?? [])
+      activityInfo.set(a.id as string, {
+        minutes: (a.duration_min as number | null) ?? null,
+        effort: (a.effort as string | null) ?? null,
+        kcal: (a.kcal as number | null) ?? null,
+      });
+  }
   const nameById = new Map<string, string>();
   for (const e of exRows ?? []) nameById.set(e.id as string, e.name as string);
 
@@ -113,6 +130,18 @@ export default async function WorkoutHistoryPage() {
                 </span>
               ) : null}
             </div>
+            {activityInfo.has(sess.id as string) ? (
+              <p className="tnum text-xs text-muted">
+                Extra activity
+                {activityInfo.get(sess.id as string)?.effort
+                  ? ` · ${(activityInfo.get(sess.id as string)?.effort ?? "").replace(/^./, (c) => c.toUpperCase())}`
+                  : ""}
+                {" · "}
+                {activityInfo.get(sess.id as string)?.kcal != null
+                  ? `${activityInfo.get(sess.id as string)?.kcal} kcal`
+                  : "— kcal"}
+              </p>
+            ) : null}
             <ul className="mt-1">
               {Array.from(byEx.entries()).map(([exId, rows]) => {
                 const isPr = prPair.has(`${sess.id as string}:${exId}`);
