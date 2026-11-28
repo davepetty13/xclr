@@ -3,9 +3,14 @@ import Anthropic from "@anthropic-ai/sdk";
 import { anthropic, costUsd, MissingApiKeyError } from "@/lib/anthropic";
 import type { createClient } from "@/lib/supabase/server";
 import { getCoachUse } from "@/lib/ai-limit";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 // Optional: record this call's tokens + cost in ai_usage (Goals → AI usage).
 // Best-effort — a failed usage write never fails the AI call.
+// Written with the service-role client: signed-in users have NO insert on
+// ai_usage (migration 010), so nobody can forge or pad their own spend. The
+// user id comes only from `track`, which every caller builds from the
+// server-side session (auth.getUser), never from client input.
 export type UsageTrack = {
   supabase: ReturnType<typeof createClient>;
   userId: string;
@@ -14,7 +19,14 @@ export type UsageTrack = {
 
 async function recordUsage(track: UsageTrack, model: string, message: Anthropic.Message) {
   const u = message.usage;
-  const { error } = await track.supabase.from("ai_usage").insert({
+  let admin;
+  try {
+    admin = createAdminClient();
+  } catch (e) {
+    console.error(`[ai_usage] ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+  const { error } = await admin.from("ai_usage").insert({
     user_id: track.userId,
     label: track.label,
     model,

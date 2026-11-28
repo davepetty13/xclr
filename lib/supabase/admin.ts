@@ -7,6 +7,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 //     the sync-link token to exactly one user
 //   - saving a push subscription (one device endpoint can only belong to one
 //     user), always scoped to the signed-in user's id
+//   - writing ai_usage rows (lib/ai-call.ts) — users have no insert on it
+//   - access lookups (lib/access.ts) and owner-checked People / delete paths
 // Never import from client code, and always filter by a user id you verified.
 //
 // Env (server-only, never NEXT_PUBLIC_):

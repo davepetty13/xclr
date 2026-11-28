@@ -8,6 +8,7 @@ import { ProfileSettingsForm } from "@/components/app/profile-settings-form";
 import { ProfileHealth, type HealthItem } from "@/components/app/profile-health";
 import { getCurrentUser } from "@/lib/session";
 import { getCurrentAccess } from "@/lib/access";
+import { OWNER_USER_ID } from "@/lib/owner";
 import { DeleteMyData } from "@/components/app/delete-my-data";
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -44,6 +45,9 @@ export default async function ProfilePage() {
     getCurrentAccess().catch(() => null),
   ]);
   const owner = access?.role === "owner";
+  // Delete card: never for the owner (by id or row), and never when the access
+  // lookup failed (getCurrentAccess throws → null) — fail closed.
+  const canDelete = !!access && !owner && user.id !== OWNER_USER_ID;
 
   const tz = (p?.timezone as string | null) ?? DEFAULT_TZ;
   const unit: "kg" | "lbs" = p?.weight_unit === "lbs" ? "lbs" : "kg";
@@ -187,7 +191,7 @@ export default async function ProfilePage() {
             Download my data
           </a>
         </div>
-        {owner ? null : <DeleteMyData />}
+        {canDelete ? <DeleteMyData /> : null}
       </section>
     </main>
   );

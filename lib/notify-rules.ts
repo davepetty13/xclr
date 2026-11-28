@@ -4,6 +4,7 @@ import { getDayPlan, getWeekStatus } from "@/lib/programs";
 import { addDays, DEFAULT_TZ, localDayStartISO, todayLocal } from "@/lib/time";
 import { MEAL_COUNTS, inQuietHours, readPrefs, timeLabel, toMinutes, type NotifyPrefs } from "@/lib/notify-prefs";
 import { pushToUser } from "@/lib/push";
+import { OWNER_USER_ID } from "@/lib/owner";
 
 // The reminder job (app/api/cron/notify, every 15 min). For each user with
 // settings, work out what is due right now in THEIR timezone and still true
@@ -499,7 +500,23 @@ export async function evaluateUser(admin: Supa, userId: string, prefsRow: Record
 export async function runNotify(admin: Supa) {
   const { data: rows, error } = await admin.from("notification_prefs").select("*").limit(1000);
   if (error) throw new Error(`prefs read failed: ${error.code ?? "?"}`);
-  const ids = (rows ?? []).map((r) => r.user_id as string);
+  // Invite-only (migration 010): only the owner and active members get
+  // reminders. Paused people, and anyone with no app_members row, are skipped.
+  // If the member read fails, only the owner (fixed id) is notified.
+  const prefIds = (rows ?? []).map((r) => r.user_id as string);
+  const allowedIds = new Set<string>([OWNER_USER_ID]);
+  if (prefIds.length) {
+    const { data: members, error: mErr } = await admin
+      .from("app_members")
+      .select("user_id, role, status")
+      .in("user_id", prefIds);
+    if (mErr) console.error(`[cron:notify] members read failed: ${mErr.code ?? "?"}`);
+    for (const m of members ?? []) {
+      if (m.user_id && (m.role === "owner" || m.status === "active")) allowedIds.add(m.user_id as string);
+    }
+  }
+  const allowedRows = (rows ?? []).filter((r) => allowedIds.has(r.user_id as string));
+  const ids = allowedRows.map((r) => r.user_id as string);
   const tzById = new Map<string, string | null>();
   if (ids.length) {
     const { data: profs } = await admin.from("profiles").select("id, timezone").in("id", ids);
@@ -509,7 +526,7 @@ export async function runNotify(admin: Supa) {
   let created = 0;
   let pushed = 0;
   let failed = 0;
-  for (const r of rows ?? []) {
+  for (const r of allowedRows) {
     try {
       const res = await evaluateUser(admin, r.user_id as string, r, tzById.get(r.user_id as string) ?? null);
       users++;

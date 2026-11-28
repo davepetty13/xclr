@@ -39,6 +39,10 @@ function toAccess(row: Record<string, unknown> | null): Access | null {
 
 // The member row for this auth user: by user_id first, else by email (an
 // invite that hasn't been linked yet). Service-role read, always filtered.
+// THROWS when the lookup itself fails, so callers fail closed: "couldn't
+// check" is never treated the same as "no row" or "not the owner".
+export class AccessLookupError extends Error {}
+
 export async function getAccess(user: Pick<User, "id" | "email">): Promise<Access | null> {
   const admin = createAdminClient();
   const { data: byId, error } = await admin
@@ -46,15 +50,22 @@ export async function getAccess(user: Pick<User, "id" | "email">): Promise<Acces
     .select("email, role, status, ai_limit_usd")
     .eq("user_id", user.id)
     .maybeSingle();
-  if (error) console.error(`[access] by user_id failed: ${error.message}`);
+  if (error) {
+    console.error(`[access] by user_id failed: ${error.message}`);
+    throw new AccessLookupError("access lookup failed");
+  }
   if (byId) return toAccess(byId);
   const email = normEmail(user.email);
   if (!email) return null;
-  const { data: byEmail } = await admin
+  const { data: byEmail, error: emailErr } = await admin
     .from("app_members")
     .select("email, role, status, ai_limit_usd")
     .eq("email", email)
     .maybeSingle();
+  if (emailErr) {
+    console.error(`[access] by email failed: ${emailErr.message}`);
+    throw new AccessLookupError("access lookup failed");
+  }
   return toAccess(byEmail);
 }
 
@@ -71,5 +82,9 @@ export const getCurrentAccess = cache(async (): Promise<Access | null> => {
 });
 
 export async function isOwner(): Promise<boolean> {
-  return (await getCurrentAccess())?.role === "owner";
+  try {
+    return (await getCurrentAccess())?.role === "owner";
+  } catch {
+    return false;
+  }
 }

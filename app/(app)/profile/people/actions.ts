@@ -14,7 +14,8 @@ export type PeopleResult = { ok: true; message?: string } | { ok: false; error: 
 const NOT_OWNER: PeopleResult = { ok: false, error: "Only the owner can change people." };
 
 async function ownerOnly(): Promise<boolean> {
-  const a = await getCurrentAccess();
+  // A failed lookup throws (lib/access.ts) → not the owner (fail closed).
+  const a = await getCurrentAccess().catch(() => null);
   return a?.role === "owner";
 }
 

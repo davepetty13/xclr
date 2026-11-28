@@ -20,7 +20,7 @@ function money(n: number): string {
 // limit / pause / remove. Everyone else gets a 404.
 export default async function PeoplePage() {
   const user = await getCurrentUser();
-  const access = await getCurrentAccess();
+  const access = await getCurrentAccess().catch(() => null);
   if (!user || access?.role !== "owner") notFound();
 
   const admin = createAdminClient();

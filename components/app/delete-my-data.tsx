@@ -5,7 +5,10 @@ import { deleteMyData } from "@/app/(app)/profile/actions";
 
 // Profile → Your data → "Delete my data and leave Xclr", with an in-app typed
 // confirm. Everything goes: logs, program, photos, Watch data, the account.
-export function DeleteMyData() {
+// `endpoint` (the paused-member /leave page) posts to that route handler
+// instead of calling the server action — middleware lets a paused person
+// reach only that one route, never a server action.
+export function DeleteMyData({ endpoint }: { endpoint?: string } = {}) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -29,7 +32,16 @@ export function DeleteMyData() {
     setBusy(true);
     setError(null);
     try {
-      const r = await deleteMyData(text);
+      const r: { ok: true } | { ok: false; error: string } = endpoint
+        ? await fetch(endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ confirm: text }),
+          }).then(async (res) => {
+            const j = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+            return j?.ok ? { ok: true as const } : { ok: false as const, error: j?.error || "That didn't go through. Try again." };
+          })
+        : await deleteMyData(text);
       if (!r.ok) {
         setError(r.error);
         setBusy(false);

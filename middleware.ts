@@ -1,5 +1,6 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { OWNER_USER_ID } from "@/lib/owner";
 
 type CookieToSet = { name: string; value: string; options: CookieOptions };
 
@@ -53,19 +54,39 @@ export async function middleware(request: NextRequest) {
   // own row — so this is one small query per request and needs no secret key.
   // Paused / removed people lose access on their very next request.
   if (user && !isPublic) {
+    const isRead = request.method === "GET" || request.method === "HEAD";
     const { data: rows, error } = await supabase
       .from("app_members")
       .select("role, status")
       .limit(1);
     if (error) {
-      // Fail open on a database hiccup so the owner isn't locked out by a
-      // blip; every AI call still requires a member row (lib/ai-limit.ts).
+      // Fail CLOSED for everyone but the owner (by fixed id, so a database
+      // blip can't lock Dave out). RLS (public.is_member(), migration 010)
+      // backs this up on the write-heavy tables.
       console.error(`[middleware] member check failed: ${error.message}`);
+      if (user.id !== OWNER_USER_ID) {
+        if (!isRead) {
+          return NextResponse.json({ error: "Couldn't check access. Try again in a minute." }, { status: 503 });
+        }
+        const url = request.nextUrl.clone();
+        url.pathname = "/not-invited";
+        url.search = "?err=1";
+        return NextResponse.redirect(url);
+      }
     } else {
       const row = rows?.[0];
-      const allowed = !!row && (row.role === "owner" || row.status === "active");
-      if (!allowed) {
-        if (request.method !== "GET" && request.method !== "HEAD") {
+      const allowed =
+        user.id === OWNER_USER_ID || (!!row && (row.role === "owner" || row.status === "active"));
+      // A paused person may still delete their data: ONLY the /leave page (GET)
+      // and its dedicated delete route (POST /leave/delete). No other page and
+      // no server action is reachable for them — a server action is a POST to
+      // a page path, and POST /leave itself is refused here.
+      const pausedLeave =
+        !!row &&
+        row.status === "paused" &&
+        ((path === "/leave" && isRead) || (path === "/leave/delete" && request.method === "POST"));
+      if (!allowed && !pausedLeave) {
+        if (!isRead) {
           return NextResponse.json({ error: "Not invited" }, { status: 403 });
         }
         const url = request.nextUrl.clone();
