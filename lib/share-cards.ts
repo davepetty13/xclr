@@ -34,15 +34,65 @@ export type CardBackground = "dark" | "paper" | "photo";
 
 export type ShareStat = { label: string; value: string; unit?: string; tone?: "pr" | "good" };
 
+// Session card v2: what the list under the stats shows, and how gains read.
+export type ShowMode = "wins" | "muscle" | "top3" | "every";
+export const SHOW_MODES: { value: ShowMode; label: string }[] = [
+  { value: "wins", label: "Wins vs last time" },
+  { value: "muscle", label: "By muscle group" },
+  { value: "top3", label: "Top 3 lifts" },
+  { value: "every", label: "Every exercise" },
+];
+export type GainUnit = "pct" | "kg";
+export type CompareTo = "last" | "week1";
+export const COMPARE_OPTIONS: { value: CompareTo; label: string }[] = [
+  { value: "last", label: "Last time" },
+  { value: "week1", label: "Week 1" },
+];
+
+export type MuscleGroup = "push" | "pull" | "legs" | "core" | "cardio" | "mobility" | "other";
+export const MUSCLE_LABEL: Record<MuscleGroup, string> = {
+  push: "Push",
+  pull: "Pull",
+  legs: "Legs",
+  core: "Core",
+  cardio: "Cardio",
+  mobility: "Mobility",
+  other: "Other",
+};
+
+// One exercise's change against the comparison session (same load type only).
+export type Gain = {
+  dir: "up" | "steady" | "down";
+  pct: string | null; // "+11%" — null where a % means nothing (reps, assist, time)
+  abs: string; // "+2.5 kg", "+2.5 kg/side", "+2 reps", "5 kg less assist", "+5 min"
+  score: number; // relative change, for ranking only
+};
+
+export type SessionLift = {
+  name: string;
+  group: MuscleGroup;
+  value: string; // best set: "62.5 kg × 8"
+  volume: number; // kg moved (real external load only)
+  sets: number;
+  pr: boolean;
+};
+
+export type SessionCompare = {
+  gains: (Gain | null)[]; // same order as lifts; null = not done (same load type) that time
+  groupVolume: Partial<Record<MuscleGroup, number>>; // that session's kg per group
+};
+
 export type SessionCardData = {
   dateLabel: string; // "THU · 26 NOV 2026"
   shortDate: string; // "THU 26 NOV"
   titleTop: string; // "DAY 4"
   titleBottom: string | null; // "PUSH"
-  subline: string | null; // "Week 3 · Upper / Lower"
+  subline: string | null; // "Week 3 · Lose fat"
   week: number | null;
   stats: ShareStat[]; // VOLUME / SETS / AVG RPE — only the ones with data
-  topSets: { name: string; value: string }[]; // "62.5 kg × 8"
+  lifts: SessionLift[]; // in the order the exercises were logged
+  firstLabel: string; // "FIRST TIME" (a program day done for the first time) / "THIS SESSION"
+  compare: Record<CompareTo, SessionCompare | null>; // null = no earlier session to compare
   prNames: string[];
   note: string | null; // only drawn when "Session notes" is on
 };
@@ -84,6 +134,9 @@ export type DrawOptions = {
   showNotes: boolean;
   showWeight: boolean;
   fonts: CardFonts;
+  show: ShowMode; // session card only
+  gainUnit: GainUnit;
+  compareTo: CompareTo;
 };
 
 // ── Fonts ───────────────────────────────────────────────────────────────────
@@ -218,6 +271,67 @@ function wrap(p: Pen, str: string, s: TextStyle, maxW: number, maxLines: number)
   return lines.map((l) => ellipsize(p, l, s, maxW));
 }
 
+// Headline words. With `glue`, a dash / slash / dot sticks to the word before
+// it, and so does a lone letter or digit, so "UPPER A — PUSH" breaks as
+// "UPPER A —" / "PUSH" and a line never starts with "— PUSH".
+function headlineTokens(str: string, glue: boolean): string[] {
+  const raw = str.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  if (!glue) return raw;
+  const out: string[] = [];
+  for (const w of raw) {
+    if (out.length && (/^[—–\-/·&+|:]$/.test(w) || /^[A-Za-z0-9]$/.test(w))) out[out.length - 1] += ` ${w}`;
+    else out.push(w);
+  }
+  return out;
+}
+
+// Greedy word wrap with no line limit; null when one word alone is too wide.
+function wrapTokens(p: Pen, tokens: string[], s: TextStyle, maxW: number): string[] | null {
+  const lines: string[] = [];
+  let cur = "";
+  for (const t of tokens) {
+    if (measure(p, t, s) > maxW) return null;
+    const next = cur ? `${cur} ${t}` : t;
+    if (measure(p, next, s) <= maxW) cur = next;
+    else {
+      lines.push(cur);
+      cur = t;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+// Largest size (max → min) at which `str` wraps word by word into ≤ maxLines
+// lines of maxW, and those lines plus the `fixed` lines above them stay within
+// maxH. Only when even a single word can't fit at the minimum size does the
+// text get an ellipsis.
+function fitHeadline(
+  p: Pen,
+  str: string,
+  s: TextStyle,
+  o: { max: number; min: number; maxW: number; maxLines: number; maxH: number; lh: number; fixed?: string[] }
+): { size: number; lines: string[] } {
+  const fixed = o.fixed ?? [];
+  for (const glue of [true, false]) {
+    const tokens = headlineTokens(str, glue);
+    for (let size = o.max; size >= o.min; size -= 1) {
+      const st = { ...s, size };
+      if (fixed.some((f) => measure(p, f, st) > o.maxW)) continue;
+      const lines = wrapTokens(p, tokens, st, o.maxW);
+      if (!lines || lines.length > o.maxLines) continue;
+      if ((lines.length + fixed.length) * size * o.lh > o.maxH) continue;
+      return { size, lines };
+    }
+  }
+  // Too long for maxLines even at the minimum size: keep every word (one more
+  // line; the list below makes room). Ellipsis only for a word that can't fit.
+  const st = { ...s, size: o.min };
+  const all = wrapTokens(p, headlineTokens(str, false), st, o.maxW);
+  if (all && all.length <= o.maxLines + 1) return { size: o.min, lines: all };
+  return { size: o.min, lines: wrap(p, str, st, o.maxW, o.maxLines + 1) };
+}
+
 function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: number) {
   const rr = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
@@ -337,9 +451,12 @@ function statGrid(p: Pen, stats: ShareStat[], top: number, valueSize: number, un
       const x = PAD_X + c * (colW + 14);
       text(p, s.label, x, y + 9, LABEL(p.t));
       const color = s.tone === "pr" ? p.t.pr : s.tone === "good" ? p.t.good : p.t.text;
-      const vStyle: TextStyle = { size: valueSize, weight: 700, face: "display", color, track: -0.03 };
+      const vBase: TextStyle = { size: valueSize, weight: 700, face: "display", color, track: -0.03 };
+      // A word value ("Upper A — Push") shrinks to fit before it is cut.
+      const maxW = s.unit ? colW - 30 : colW - 6;
+      const vStyle = { ...vBase, size: fitSize(p, [s.value], vBase, valueSize, 16, maxW) };
       const base = y + 12 + bl(0, valueSize, 1.25);
-      const vw = text(p, ellipsize(p, s.value, vStyle, colW - 30), x, base, vStyle);
+      const vw = text(p, ellipsize(p, s.value, vStyle, maxW), x, base, vStyle);
       if (s.unit)
         text(p, ` ${s.unit}`, x + vw, base, { size: unitSize, weight: 600, color: p.t.muted });
     }
@@ -351,7 +468,7 @@ function statGrid(p: Pen, stats: ShareStat[], top: number, valueSize: number, un
 
 function pill(p: Pen, label: string, right: number, top: number) {
   const s: TextStyle = { size: 10, weight: 700, color: p.t.pillText, track: 0.14 };
-  const str = ellipsize(p, label, s, 190);
+  const str = ellipsize(p, label, s, 216); // leaves room for the XCLR mark
   const w = measure(p, str, s) + 16;
   p.ctx.fillStyle = p.t.pillBg;
   roundRect(p.ctx, right - w, top, w, 22, 6);
@@ -414,55 +531,391 @@ const FOOTER_TOP = H - PAD_TOP - 22; // 590
 
 // ── Full layouts (Dark / Paper) ─────────────────────────────────────────────
 
+// ── Session card v2 (CardSessionWins / Muscle / Top3 mocks) ────────────────
+
+type Row = { name: string; value: string; gain: string | null; tone: "good" | "muted" };
+type Section = { label: string; color: string } & ({ rows: Row[] } | { names: string[] });
+
+const LABEL_H = 16; // section label (9px caps) + gap
+const ROW_GAP = 12;
+const SECTION_GAP = 16;
+const MORE_H = 20;
+
+function gainText(g: Gain, unit: GainUnit): string {
+  return unit === "pct" && g.pct ? g.pct : g.abs;
+}
+
+function liftRow(l: SessionLift, gain: string | null = null): Row {
+  return { name: l.name, value: l.value, gain, tone: "good" };
+}
+
+// "DAY 1" then the day label in ember, wrapped word by word and shrunk to fit.
+function sessionHeadline(p: Pen, top: string, bottom: string | null, y: number): number {
+  const hs: TextStyle = { size: 76, weight: 800, face: "display", color: p.t.text, track: -0.05 };
+  const LH = 0.9;
+  if (!bottom) {
+    const size = fitSize(p, [top], hs, 76, 34, CONTENT_W);
+    const s = { ...hs, size };
+    text(p, ellipsize(p, top, s, CONTENT_W), PAD_X, bl(y, size, LH), s);
+    return y + size * LH;
+  }
+  const fit = fitHeadline(p, bottom, hs, {
+    max: 76,
+    min: 30,
+    maxW: CONTENT_W,
+    maxLines: 3,
+    maxH: 168,
+    lh: LH,
+    fixed: [top],
+  });
+  const s = { ...hs, size: fit.size };
+  text(p, top, PAD_X, bl(y, fit.size, LH), s);
+  y += fit.size * LH;
+  for (const l of fit.lines) {
+    text(p, l, PAD_X, bl(y, fit.size, LH), { ...s, color: p.t.accent });
+    y += fit.size * LH;
+  }
+  return y;
+}
+
+// One row of stats (3 across; 4 only if a real Time stat is ever added).
+function statRow(p: Pen, stats: ShareStat[], top: number): number {
+  const cols = Math.min(4, stats.length);
+  const gap = 10;
+  const colW = (CONTENT_W - gap * (cols - 1)) / cols;
+  const vSize = cols >= 4 ? 20 : 24;
+  stats.slice(0, cols).forEach((s, i) => {
+    const x = PAD_X + i * (colW + gap);
+    text(p, ellipsize(p, s.label, LABEL(p.t), colW), x, top + 9, LABEL(p.t));
+    const color = s.tone === "pr" ? p.t.pr : s.tone === "good" ? p.t.good : p.t.text;
+    const vStyle: TextStyle = { size: vSize, weight: 700, face: "display", color, track: -0.03 };
+    const us: TextStyle = { size: 11, weight: 600, color: p.t.muted };
+    const unitW = s.unit ? measure(p, ` ${s.unit}`, us) : 0;
+    const base = top + 12 + bl(0, vSize, 1.25);
+    const vw = text(p, ellipsize(p, s.value, vStyle, colW - unitW), x, base, vStyle);
+    if (s.unit) text(p, ` ${s.unit}`, x + vw, base, us);
+  });
+  return top + 12 + vSize * 1.25;
+}
+
+type RowLayout = { lines: string[]; value: string; h: number };
+
+function layoutRow(p: Pen, r: Row, size: number): RowLayout {
+  const vs: TextStyle = { size, weight: 600, face: "display", color: p.t.text };
+  const ns: TextStyle = { size, weight: 500, color: p.t.text };
+  const gainW = r.gain ? measure(p, ` ${r.gain}`, vs) : 0;
+  let value = r.value;
+  if (CONTENT_W - measure(p, value, vs) - gainW - 10 < 110) value = ellipsize(p, value, vs, CONTENT_W - gainW - 120);
+  const nameW = CONTENT_W - measure(p, value, vs) - gainW - 10;
+  const lines = wrap(p, r.name, ns, nameW, 2);
+  return { lines, value, h: lines.length * (size + 3) };
+}
+
+function drawRow(p: Pen, r: Row, L: RowLayout, top: number, size: number) {
+  const vs: TextStyle = { size, weight: 600, face: "display", color: p.t.text };
+  const ns: TextStyle = { size, weight: 500, color: p.t.text };
+  const base = top + size * 0.96;
+  let right = W - PAD_X;
+  if (r.gain) {
+    const gs = { ...vs, color: r.tone === "good" ? p.t.good : p.t.muted };
+    right -= text(p, r.gain, right, base, gs, "right");
+    right -= measure(p, " ", vs);
+  }
+  text(p, L.value, right, base, vs, "right");
+  L.lines.forEach((l, i) => text(p, l, PAD_X, base + i * (size + 3), ns));
+}
+
+function moreLine(p: Pen, n: number, noun: string, y: number) {
+  const s: TextStyle = { size: 11, weight: 500, color: p.t.muted };
+  text(p, `+ ${n} more ${noun}${n === 1 ? "" : "s"}`, PAD_X, y + 6 + 10, s);
+}
+
+// Sections of rows / name lines, as many as fit above `bottom`; whatever is
+// left (plus `hidden`, items never in a section) becomes "+ N more …".
+function drawSections(
+  p: Pen,
+  sections: Section[],
+  top: number,
+  bottom: number,
+  size: number,
+  noun: string,
+  hidden = 0
+): number {
+  const items = (s: Section) => ("rows" in s ? s.rows.length : s.names.length);
+  let left = sections.reduce((n, s) => n + items(s), 0) + hidden;
+  let y = top;
+  let first = true;
+  let stop = false;
+  for (const sec of sections) {
+    if (stop || !items(sec)) continue;
+    const start = first ? y : y + SECTION_GAP;
+    const labelStyle = { ...LABEL(p.t), color: sec.color };
+    if ("rows" in sec) {
+      let yy = start + LABEL_H;
+      let drawn = 0;
+      for (const r of sec.rows) {
+        const L = layoutRow(p, r, size);
+        const sep = drawn ? ROW_GAP : 0;
+        const need = sep + L.h + (left - 1 > 0 ? MORE_H : 0);
+        if (yy + need > bottom) {
+          stop = true;
+          break;
+        }
+        if (!drawn) text(p, sec.label, PAD_X, start + 9, labelStyle);
+        else hline(p, PAD_X, yy + ROW_GAP / 2 - 1, CONTENT_W, p.t.rowLine);
+        yy += sep;
+        drawRow(p, r, L, yy, size);
+        yy += L.h;
+        drawn++;
+        left--;
+      }
+      if (drawn) {
+        y = yy;
+        first = false;
+      }
+    } else {
+      const ns: TextStyle = { size: 13, weight: 500, color: p.t.soft };
+      const lineH = 17;
+      const n = sec.names.length;
+      const rest = left - n;
+      const room = Math.floor((bottom - (start + LABEL_H) - (rest > 0 ? MORE_H : 0)) / lineH);
+      const maxLines = Math.min(2, room);
+      if (maxLines < 1) {
+        stop = true;
+        continue;
+      }
+      let lines: string[] | null = null;
+      for (let k = n; k >= 1 && !lines; k--) {
+        const str = sec.names.slice(0, k).join(" · ") + (k < n ? ` · +${n - k}` : "");
+        const w = wrapTokens(p, str.split(" "), ns, CONTENT_W);
+        if (w && w.length <= maxLines) lines = w;
+      }
+      lines ??= wrap(p, sec.names.join(" · "), ns, CONTENT_W, maxLines);
+      text(p, sec.label, PAD_X, start + 9, labelStyle);
+      let yy = start + LABEL_H;
+      for (const l of lines) {
+        text(p, l, PAD_X, yy + 12.5, ns);
+        yy += lineH;
+      }
+      y = yy - 4;
+      left -= n; // the line carries its own "+N"
+      first = false;
+    }
+  }
+  if (left > 0) {
+    moreLine(p, left, noun, y);
+    y += MORE_H;
+  }
+  return y;
+}
+
+type GroupSum = { group: MuscleGroup; volume: number; sets: number; names: string[] };
+
+function groupSums(lifts: SessionLift[]): GroupSum[] {
+  const m = new Map<MuscleGroup, GroupSum>();
+  for (const l of lifts) {
+    const g = m.get(l.group) ?? { group: l.group, volume: 0, sets: 0, names: [] };
+    g.volume += l.volume;
+    g.sets += l.sets;
+    g.names.push(l.name);
+    m.set(l.group, g);
+  }
+  return Array.from(m.values()).sort((a, b) => b.volume - a.volume || b.sets - a.sets);
+}
+
+const fmtKg = (n: number) => Math.round(n).toLocaleString("en-US");
+
+// Change of a group's volume vs the comparison session. Nothing when that
+// session had no volume there (no number to compare) or it went down.
+function groupChange(
+  g: GroupSum,
+  cmp: SessionCompare | null,
+  unit: GainUnit
+): { text: string; up: boolean } | null {
+  const prev = cmp?.groupVolume[g.group];
+  if (prev == null || !(prev > 0) || !(g.volume > 0)) return null;
+  const delta = g.volume - prev;
+  if (unit === "pct") {
+    const r = Math.round((delta / prev) * 100);
+    if (r < 0) return null;
+    return r === 0 ? { text: "±0%", up: false } : { text: `+${r}%`, up: true };
+  }
+  const k = Math.round(delta);
+  if (k < 0) return null;
+  return k === 0 ? { text: "±0 kg", up: false } : { text: `+${fmtKg(k)} kg`, up: true };
+}
+
+function drawGroups(p: Pen, d: SessionCardData, o: DrawOptions, top: number, bottom: number): number {
+  const groups = groupSums(d.lifts);
+  const cmp = d.compare[o.compareTo];
+  const maxVol = Math.max(0, ...groups.map((g) => g.volume));
+  const BLOCK = 49;
+  const GAP = 14;
+  let y = top;
+  let shown = 0;
+  for (const g of groups) {
+    const after = groups.length - shown - 1;
+    const need = (shown ? GAP : 0) + BLOCK + (after > 0 ? MORE_H : 0);
+    if (y + need > bottom) break;
+    if (shown) y += GAP;
+    const base = y + 16;
+    text(p, MUSCLE_LABEL[g.group].toUpperCase(), PAD_X, base, { ...LABEL(p.t), color: p.t.text });
+    const ch = groupChange(g, cmp, o.gainUnit);
+    let right = W - PAD_X;
+    if (ch) {
+      const cs: TextStyle = { size: 13, weight: 700, face: "display", color: ch.up ? p.t.good : p.t.muted };
+      right -= text(p, ch.text, right, base, cs, "right") + 5;
+    }
+    const vs: TextStyle = { size: 18, weight: 700, face: "display", color: p.t.text };
+    const us: TextStyle = { size: 11, weight: 600, color: p.t.muted };
+    if (g.volume > 0) {
+      right -= text(p, " kg", right, base, us, "right");
+      text(p, fmtKg(g.volume), right, base, vs, "right");
+    } else {
+      right -= text(p, g.sets === 1 ? " set" : " sets", right, base, us, "right");
+      text(p, String(g.sets), right, base, vs, "right");
+    }
+    const barY = y + 24;
+    p.ctx.fillStyle = p.t.track;
+    roundRect(p.ctx, PAD_X, barY, CONTENT_W, 6, 3);
+    p.ctx.fill();
+    if (g.volume > 0 && maxVol > 0) {
+      p.ctx.fillStyle = ch?.up ? p.t.accent : p.t.muted;
+      roundRect(p.ctx, PAD_X, barY, Math.max(6, (g.volume / maxVol) * CONTENT_W), 6, 3);
+      p.ctx.fill();
+    }
+    const ns: TextStyle = { size: 11, weight: 500, color: p.t.muted };
+    text(p, ellipsize(p, g.names.join(" · "), ns, CONTENT_W), PAD_X, barY + 6 + 15, ns);
+    y += BLOCK;
+    shown++;
+  }
+  if (shown < groups.length) {
+    const n = groups.length - shown;
+    text(p, `+ ${n} more group${n === 1 ? "" : "s"}`, PAD_X, y + 16, { size: 11, weight: 500, color: p.t.muted });
+    y += MORE_H;
+  }
+  return y;
+}
+
+// Wins: NEW PR, WENT UP, HELD STEADY. Lifts that went down are simply not
+// listed; with nothing earlier to compare, one FIRST TIME list and no gains.
+function winsSections(p: Pen, d: SessionCardData, o: DrawOptions): Section[] {
+  const cmp = d.compare[o.compareTo];
+  if (!cmp) return [{ label: d.firstLabel, color: p.t.muted, rows: d.lifts.map((l) => liftRow(l)) }];
+  const idx = d.lifts.map((_, i) => i);
+  const g = (i: number) => cmp.gains[i];
+  const prs = idx.filter((i) => d.lifts[i].pr);
+  const up = idx.filter((i) => !d.lifts[i].pr && g(i)?.dir === "up").sort((a, b) => g(b)!.score - g(a)!.score);
+  const steady = idx.filter((i) => !d.lifts[i].pr && g(i)?.dir === "steady");
+  const fresh = idx.filter((i) => !d.lifts[i].pr && g(i) == null);
+  const row = (i: number) => {
+    const gi = g(i);
+    return liftRow(d.lifts[i], gi && gi.dir === "up" ? gainText(gi, o.gainUnit) : null);
+  };
+  const all: Section[] = [
+    { label: "NEW PR", color: p.t.good, rows: prs.map(row) },
+    { label: "WENT UP", color: p.t.accent, rows: up.map(row) },
+    { label: "HELD STEADY", color: p.t.muted, names: steady.map((i) => d.lifts[i].name) },
+    // done today but not (with the same load type) that time: no number to compare
+    { label: "ALSO TRAINED", color: p.t.muted, names: fresh.map((i) => d.lifts[i].name) },
+  ];
+  const sections = all.filter((s) => ("rows" in s ? s.rows.length : s.names.length) > 0);
+  // Nothing to celebrate against that session: just the sets, no gains.
+  if (!sections.length) return [{ label: "TOP SETS", color: p.t.muted, rows: d.lifts.map((l) => liftRow(l)) }];
+  return sections;
+}
+
+// Top 3: biggest gains first (est. 1RM change), then PRs, then most volume.
+function top3Rows(d: SessionCardData, o: DrawOptions): Row[] {
+  const cmp = d.compare[o.compareTo];
+  const idx = d.lifts.map((_, i) => i);
+  const g = (i: number) => cmp?.gains[i] ?? null;
+  const up = idx.filter((i) => g(i)?.dir === "up").sort((a, b) => g(b)!.score - g(a)!.score);
+  const prs = idx.filter((i) => !up.includes(i) && d.lifts[i].pr);
+  const rest = idx
+    .filter((i) => !up.includes(i) && !prs.includes(i))
+    .sort((a, b) => d.lifts[b].volume - d.lifts[a].volume);
+  return [...up, ...prs, ...rest].slice(0, 3).map((i) => {
+    const gi = g(i);
+    const gain = gi && gi.dir === "up" ? gainText(gi, o.gainUnit) : d.lifts[i].pr ? "PR" : null;
+    return liftRow(d.lifts[i], gain);
+  });
+}
+
+function sessionList(p: Pen, d: SessionCardData, o: DrawOptions, top: number, bottom: number): number {
+  if (!d.lifts.length) return top;
+  switch (o.show) {
+    case "muscle":
+      return drawGroups(p, d, o, top, bottom);
+    case "top3": {
+      const rows = top3Rows(d, o);
+      const label = rows.length === 1 ? "BEST LIFT" : `BEST ${rows.length} LIFTS`;
+      return drawSections(p, [{ label, color: p.t.muted, rows }], top, bottom, 14, "exercise", d.lifts.length - rows.length);
+    }
+    case "every":
+      return drawSections(p, [{ label: "TOP SETS", color: p.t.muted, rows: d.lifts.map((l) => liftRow(l)) }], top, bottom, 13, "exercise");
+    default:
+      return drawSections(p, winsSections(p, d, o), top, bottom, 13, "exercise");
+  }
+}
+
+function prChipLabel(d: SessionCardData): string {
+  return `NEW PR · ${d.prNames.length > 1 ? `${d.prNames.length} LIFTS` : d.prNames[0].toUpperCase()}`;
+}
+
 function sessionFull(p: Pen, d: SessionCardData, o: DrawOptions) {
   kickerRow(p, "01 / SESSION", d.dateLabel);
-  let y = PAD_TOP + 13 + 34;
-  const lines = [d.titleTop, d.titleBottom].filter((l): l is string => !!l);
-  const hs: TextStyle = { size: 76, weight: 800, face: "display", color: p.t.text, track: -0.05 };
-  const size = fitSize(p, lines, hs, 76, 40, CONTENT_W);
-  lines.forEach((l, i) => {
-    const s = { ...hs, size, color: i === 1 ? p.t.accent : p.t.text };
-    text(p, ellipsize(p, l, s, CONTENT_W), PAD_X, bl(y, size, 0.86), s);
-    y += size * 0.86;
-  });
+  let y = sessionHeadline(p, d.titleTop, d.titleBottom, PAD_TOP + 13 + 26);
   if (d.subline) {
-    y += 12;
+    y += 10;
     const s: TextStyle = { size: 12, weight: 500, color: p.t.sub, track: 0.04 };
     text(p, ellipsize(p, d.subline, s, CONTENT_W), PAD_X, y + 11.4, s);
     y += 15;
   }
   if (d.stats.length) {
-    y += 26;
+    y += 18;
     hline(p, PAD_X, y, CONTENT_W, p.t.hairline);
-    y = statGrid(p, d.stats, y + 18, 30, 13);
+    y = statRow(p, d.stats, y + 14);
   }
 
   const showNote = o.showNotes && !!d.note;
-  const limit = FOOTER_TOP - 12 - (showNote ? 16 + 21 + 18 * 2 : 0);
-  if (d.topSets.length) {
-    y += 24;
-    const rowsTop = y + 12 + 9;
-    const pitch = 35;
-    const fit = Math.max(showNote ? 2 : 1, Math.floor((limit - rowsTop + 9) / pitch));
-    const rows = d.topSets.slice(0, Math.min(fit, 6));
-    text(p, "TOP SETS", PAD_X, y + 9, LABEL(p.t));
-    y = rowsTop;
-    rows.forEach((r, i) => {
-      const vs: TextStyle = { size: 13, weight: 600, face: "display", color: p.t.text };
-      const ns: TextStyle = { size: 13, weight: 500, color: p.t.text };
-      const vw = measure(p, r.value, vs);
-      text(p, r.value, W - PAD_X, y + 12.5, vs, "right");
-      text(p, ellipsize(p, r.name, ns, CONTENT_W - vw - 12), PAD_X, y + 12.5, ns);
-      if (i < rows.length - 1) hline(p, PAD_X, y + 25, CONTENT_W, p.t.rowLine);
-      y += pitch;
-    });
-    y -= 9;
-  }
+  const bottom = FOOTER_TOP - 14 - (showNote ? 16 + 21 + 18 * 2 : 0);
+  y = sessionList(p, d, o, y + 20, bottom);
   if (showNote && d.note) noteBlock(p, d.note, y + 16, 2);
 
   logo(p, PAD_X, FOOTER_TOP, 22);
-  if (d.prNames.length)
-    pill(p, `NEW PR · ${d.prNames.length > 1 ? `${d.prNames.length} LIFTS` : d.prNames[0].toUpperCase()}`, W - PAD_X, FOOTER_TOP);
+  const cmp = d.compare[o.compareTo];
+  const prChip = d.prNames.length > 0 && (o.show === "top3" || o.show === "every" || !cmp);
+  if (prChip) pill(p, prChipLabel(d), W - PAD_X, FOOTER_TOP);
+  else if (cmp && o.show !== "every")
+    text(
+      p,
+      o.compareTo === "week1" ? "VS WEEK 1" : "VS LAST TIME",
+      W - PAD_X,
+      FOOTER_TOP + 15,
+      { size: 10, weight: 600, color: p.t.muted, track: 0.12 },
+      "right"
+    );
+}
+
+// Up to `max` rows for the photo layout, picked the same way as the full card.
+function photoRows(p: Pen, d: SessionCardData, o: DrawOptions, max: number): Row[] {
+  if (o.show === "muscle") {
+    const cmp = d.compare[o.compareTo];
+    return groupSums(d.lifts).map((g) => {
+      const ch = groupChange(g, cmp, o.gainUnit);
+      return {
+        name: MUSCLE_LABEL[g.group],
+        value: g.volume > 0 ? `${fmtKg(g.volume)} kg` : `${g.sets} ${g.sets === 1 ? "set" : "sets"}`,
+        gain: ch?.text ?? null,
+        tone: ch?.up ? "good" : "muted",
+      } satisfies Row;
+    }).slice(0, max);
+  }
+  if (o.show === "top3") return top3Rows(d, o).slice(0, max);
+  if (o.show === "every") return d.lifts.slice(0, max).map((l) => liftRow(l));
+  const rows = winsSections(p, d, o).flatMap((s) => ("rows" in s ? s.rows : []));
+  return (rows.length ? rows : d.lifts.map((l) => liftRow(l))).slice(0, max);
 }
 
 function weekFull(p: Pen, d: WeekCardData, o: DrawOptions) {
@@ -548,10 +1001,20 @@ function prFull(p: Pen, d: PrCardData) {
   text(p, "NEW PR", PAD_X, y + 9, { ...LABEL(p.t, 10), color: p.t.good });
   y += 13 + 10;
   const ns: TextStyle = { size: 40, weight: 800, face: "display", color: p.t.text, track: -0.04 };
-  const name = d.exercise.toUpperCase();
-  const nsize = fitSize(p, [name], ns, 40, 24, CONTENT_W);
-  text(p, ellipsize(p, name, { ...ns, size: nsize }, CONTENT_W), PAD_X, bl(y, nsize, 0.95), { ...ns, size: nsize });
-  y += nsize * 0.95 + 14;
+  // Long exercise names wrap onto a second line (and shrink) instead of "…".
+  const name = fitHeadline(p, d.exercise.toUpperCase(), ns, {
+    max: 40,
+    min: 24,
+    maxW: CONTENT_W,
+    maxLines: 2,
+    maxH: 2 * 40 * 0.95,
+    lh: 0.95,
+  });
+  for (const l of name.lines) {
+    text(p, l, PAD_X, bl(y, name.size, 0.95), { ...ns, size: name.size });
+    y += name.size * 0.95;
+  }
+  y += 14;
 
   const bs: TextStyle = { size: 120, weight: 800, face: "display", color: p.t.text, track: -0.05 };
   const us: TextStyle = { size: 34, weight: 800, face: "display", color: p.t.accent, track: -0.02 };
@@ -584,15 +1047,16 @@ type PhotoBlock = {
   big: string;
   bigUnit?: string;
   bigSize: number;
+  wrapBig?: boolean; // session day label: wrap onto 2 lines instead of overflowing
   detail?: string | null;
   stripCells?: WeekCardData["strip"];
-  rows?: { name: string; value: string }[];
+  rows?: { name: string; value: string; gain?: string | null; tone?: "good" | "muted" }[];
   note?: string | null;
   stats: ShareStat[];
 };
 
-function photoHeight(b: PhotoBlock, noteLines: number): number {
-  let h = 13 + 12 + b.bigSize * 0.85;
+function photoHeight(b: PhotoBlock, noteLines: number, bigLines: number): number {
+  let h = 13 + 12 + b.bigSize * 0.85 * bigLines;
   if (b.detail) h += 12 + 18;
   if (b.stripCells) h += 12 + 22 + 14;
   if (b.rows?.length) h += 12 + b.rows.length * 22;
@@ -608,9 +1072,25 @@ function photoLayout(p: Pen, b: PhotoBlock, o: DrawOptions) {
   const bs: TextStyle = { size: b.bigSize, weight: 800, face: "display", color: p.t.text, track: -0.05 };
   const us: TextStyle = { size: 26, weight: 800, face: "display", color: p.t.accent, track: -0.02 };
   const unitW = b.bigUnit ? measure(p, ` ${b.bigUnit}`, us) : 0;
-  const bigSize = fitSize(p, [b.big], bs, b.bigSize, 40, W - 48 - unitW);
+  let bigSize: number;
+  let bigLines: string[];
+  if (b.wrapBig) {
+    const fit = fitHeadline(p, b.big, bs, {
+      max: b.bigSize,
+      min: 30,
+      maxW: W - 48 - unitW,
+      maxLines: 3,
+      maxH: 2 * b.bigSize * 0.85,
+      lh: 0.85,
+    });
+    bigSize = fit.size;
+    bigLines = fit.lines;
+  } else {
+    bigSize = fitSize(p, [b.big], bs, b.bigSize, 40, W - 48 - unitW);
+    bigLines = [b.big];
+  }
   const block = { ...b, bigSize };
-  const total = photoHeight(block, noteLines.length);
+  const total = photoHeight(block, noteLines.length, bigLines.length);
   const left = 24;
   const innerW = W - 48;
   let y = H - 26 - total;
@@ -619,10 +1099,12 @@ function photoLayout(p: Pen, b: PhotoBlock, o: DrawOptions) {
 
   text(p, ellipsize(p, b.kicker, LABEL(p.t, 10), innerW), left, y + 9.5, LABEL(p.t, 10));
   y += 13 + 12;
-  const base = bl(y, bigSize, 0.85);
-  const bw = text(p, b.big, left, base, { ...bs, size: bigSize });
-  if (b.bigUnit) text(p, ` ${b.bigUnit}`, left + bw, base, us);
-  y += bigSize * 0.85;
+  bigLines.forEach((l, i) => {
+    const base = bl(y, bigSize, 0.85);
+    const bw = text(p, l, left, base, { ...bs, size: bigSize });
+    if (b.bigUnit && i === bigLines.length - 1) text(p, ` ${b.bigUnit}`, left + bw, base, us);
+    y += bigSize * 0.85;
+  });
   if (b.detail) {
     y += 12;
     const s: TextStyle = { size: 14, weight: 500, color: p.t.sub };
@@ -638,9 +1120,14 @@ function photoLayout(p: Pen, b: PhotoBlock, o: DrawOptions) {
     for (const r of b.rows) {
       const vs: TextStyle = { size: 13, weight: 600, face: "display", color: p.t.text };
       const rs: TextStyle = { size: 13, weight: 500, color: p.t.text };
-      const vw = measure(p, r.value, vs);
-      text(p, r.value, W - left, y + 14, vs, "right");
-      text(p, ellipsize(p, r.name, rs, innerW - vw - 12), left, y + 14, rs);
+      let right = W - left;
+      if (r.gain) {
+        right -= text(p, r.gain, right, y + 14, { ...vs, color: r.tone === "muted" ? p.t.muted : p.t.good }, "right");
+        right -= measure(p, " ", vs);
+      }
+      const value = ellipsize(p, r.value, vs, Math.max(60, right - left - 110));
+      const vw = text(p, value, right, y + 14, vs, "right");
+      text(p, ellipsize(p, r.name, rs, right - vw - left - 12), left, y + 14, rs);
       y += 22;
     }
   }
@@ -685,8 +1172,9 @@ function sessionPhoto(p: Pen, d: SessionCardData, o: DrawOptions) {
         : `SESSION · ${d.shortDate}`,
       big: d.titleBottom ?? d.titleTop,
       bigSize: 72,
+      wrapBig: true,
       detail: detail || null,
-      rows: d.topSets.slice(0, o.showNotes && d.note ? 2 : 3),
+      rows: photoRows(p, d, o, o.showNotes && d.note ? 2 : 3),
       note: o.showNotes ? d.note : null,
       stats: d.stats.slice(0, 3),
     },

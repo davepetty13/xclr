@@ -5,9 +5,14 @@ import { addDays, DEFAULT_TZ, localDate, localDayStartISO, todayLocal } from "@/
 import { countPRs, epley1RM, type PrSet } from "@/lib/training";
 import { formatLoad, LOAD_TYPES, type LoadType } from "@/lib/program-schema";
 import { kgToLbs } from "@/lib/units";
+import { GOAL_LABEL, isGoal } from "@/lib/goal-change";
 import type {
+  Gain,
+  MuscleGroup,
   PrCardData,
   SessionCardData,
+  SessionCompare,
+  SessionLift,
   ShareBundle,
   ShareStat,
   StripState,
@@ -48,6 +53,8 @@ export type ShareContext = {
   sets: SetRow[];
   setsBySession: Map<string, SetRow[]>;
   names: Map<string, string>;
+  groups: Map<string, MuscleGroup>;
+  goalLabel: string | null; // profiles.primary_goal in plain words ("Lose fat")
   days: Map<string, DayRow>;
   week: WeekCardData | null;
   weekPr: PrCardData | null;
@@ -122,6 +129,121 @@ function better(a: SetRow, b: SetRow): boolean {
   return d > 0 || (d === 0 && (a.reps ?? 0) > (b.reps ?? 0));
 }
 
+// ── Session v2: gains against an earlier session of the same program day ───
+
+const GROUPS: readonly MuscleGroup[] = ["push", "pull", "legs", "core", "cardio", "mobility"];
+function asGroup(v: unknown): MuscleGroup {
+  const s = typeof v === "string" ? v.trim().toLowerCase() : "";
+  return (GROUPS as readonly string[]).includes(s) ? (s as MuscleGroup) : "other";
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+// "+2.5 kg", "−1 kg", "±0 kg" (true minus sign, same as the chat cards).
+function signed(n: number, unit: string): string {
+  const v = round2(n);
+  if (v > 0) return `+${trimNum(v)}${unit}`;
+  if (v < 0) return `−${trimNum(-v)}${unit}`;
+  return `±0${unit}`;
+}
+const dirOf = (n: number): Gain["dir"] => (n > 0 ? "up" : n < 0 ? "down" : "steady");
+
+function repsGain(c: SetRow, prev: SetRow): Gain | null {
+  if (c.reps == null || prev.reps == null) return null;
+  const dr = c.reps - prev.reps;
+  const n = Math.abs(dr);
+  const abs = dr === 0 ? "±0 reps" : `${dr > 0 ? "+" : "−"}${n} ${n === 1 ? "rep" : "reps"}`;
+  return { dir: dirOf(dr), pct: null, abs, score: prev.reps > 0 ? dr / prev.reps : 0 };
+}
+
+// Best set this session vs best set of the same exercise and the SAME load
+// type that time. Weighted lifts: estimated 1RM (Epley) decides up / steady /
+// down and gives the %; "kg" shows the load change (or reps at the same load).
+// Bodyweight / time / reps-only: the reps change (or added load / minutes when
+// those changed) in both modes. Missing numbers → null (no gain shown).
+function liftGain(c: SetRow, prev: SetRow): Gain | null {
+  const t = c.type;
+  if (t === "total_kg" || t === "per_side_kg") {
+    const unit = t === "per_side_kg" ? " kg/side" : " kg";
+    const e1 = epley1RM(c.load, c.reps);
+    const e0 = epley1RM(prev.load, prev.reps);
+    const dl = round2((c.load ?? 0) - (prev.load ?? 0));
+    let rel: number | null = null;
+    if (e1 != null && e0 != null && e0 > 0) rel = (e1 - e0) / e0;
+    else if (c.load != null && prev.load != null && prev.load > 0) rel = dl / prev.load;
+    if (rel == null) return null;
+    const r = Math.round(rel * 100);
+    const dir: Gain["dir"] = r >= 1 ? "up" : r <= -1 ? "down" : "steady";
+    let abs: string;
+    if (dl > 0 || (dl < 0 && dir !== "up")) abs = signed(dl, unit);
+    else if (dl === 0) abs = repsGain(c, prev)?.abs ?? `±0${unit}`;
+    else abs = `${signed((e1 ?? 0) - (e0 ?? 0), unit)} est. 1RM`; // lighter, but more reps: 1RM rose
+    const pct = r === 0 ? "±0%" : `${r > 0 ? "+" : "−"}${Math.abs(r)}%`;
+    return { dir, pct, abs, score: rel };
+  }
+  if (t === "assist_kg") {
+    if (c.load == null || prev.load == null) return repsGain(c, prev);
+    const less = round2(prev.load - c.load); // less assist = stronger
+    if (less === 0) return repsGain(c, prev) ?? { dir: "steady", pct: null, abs: "±0 kg assist", score: 0 };
+    return {
+      dir: dirOf(less),
+      pct: null,
+      abs: less > 0 ? `${trimNum(less)} kg less assist` : `${trimNum(-less)} kg more assist`,
+      score: prev.load > 0 ? less / prev.load : 0,
+    };
+  }
+  if (t === "bodyweight" || t === "time_min") {
+    const unit = t === "time_min" ? " min" : " kg";
+    const dl = round2((c.load ?? 0) - (prev.load ?? 0));
+    if (dl === 0 || (t === "time_min" && (c.load == null || prev.load == null))) return repsGain(c, prev);
+    const base = prev.load ?? 0;
+    return { dir: dirOf(dl), pct: null, abs: signed(dl, unit), score: base > 0 ? dl / base : 0 };
+  }
+  return repsGain(c, prev);
+}
+
+// Best set per exercise (in logged order).
+function topSets(sets: SetRow[]): Map<string, SetRow> {
+  const top = new Map<string, SetRow>();
+  for (const s of sets) {
+    const cur = top.get(s.exId);
+    if (!cur || better(s, cur)) top.set(s.exId, s);
+  }
+  return top;
+}
+
+function compareWith(ctx: ShareContext, top: Map<string, SetRow>, prevId: string): SessionCompare {
+  const prevSets = ctx.setsBySession.get(prevId) ?? [];
+  const gains = Array.from(top.entries()).map(([exId, c]) => {
+    let best: SetRow | null = null;
+    for (const s of prevSets)
+      if (s.exId === exId && s.type === c.type && (!best || better(s, best))) best = s;
+    return best ? liftGain(c, best) : null;
+  });
+  const groupVolume: Partial<Record<MuscleGroup, number>> = {};
+  for (const s of prevSets) {
+    const g = ctx.groups.get(s.exId) ?? "other";
+    groupVolume[g] = (groupVolume[g] ?? 0) + volumeOf([s]);
+  }
+  return { gains, groupVolume };
+}
+
+// Earlier sessions of the same program day that have sets, oldest first.
+// "Last time" = the most recent of them; "Week 1" = the first time that day
+// was done. A session with no program day has nothing to compare against.
+function earlierSameDay(ctx: ShareContext, sess: SessionRow): SessionRow[] {
+  if (!sess.dayId) return [];
+  const at = Date.parse(sess.at);
+  return Array.from(ctx.sessions.values())
+    .filter(
+      (s) =>
+        s.id !== sess.id &&
+        s.dayId === sess.dayId &&
+        Date.parse(s.at) < at &&
+        (ctx.setsBySession.get(s.id)?.length ?? 0) > 0
+    )
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
 // ── PRs (same rule as lib/training.ts countPRs) ─────────────────────────────
 // A PR = a new best estimated 1RM for an exercise (total kg and per-side kg
 // compared separately, never flattened) against everything logged before, or
@@ -170,11 +292,12 @@ function findPRs(sets: SetRow[], inside: (s: SetRow) => boolean, cutoffISO: stri
 export async function loadShareContext(supabase: Supa, userId: string): Promise<ShareContext> {
   const { data: profile } = await supabase
     .from("profiles")
-    .select("timezone, weight_unit")
+    .select("timezone, weight_unit, primary_goal")
     .eq("id", userId)
     .maybeSingle();
   const tz = (profile?.timezone as string | null) ?? DEFAULT_TZ;
   const weightUnit: "kg" | "lbs" = profile?.weight_unit === "lbs" ? "lbs" : "kg";
+  const goalLabel = isGoal(profile?.primary_goal) ? GOAL_LABEL[profile.primary_goal] : null;
 
   const [status, { data: sessRows }, { data: setRows }, { data: exRows }, { data: dayRows }] =
     await Promise.all([
@@ -189,7 +312,7 @@ export async function loadShareContext(supabase: Supa, userId: string): Promise<
         .select("session_id, exercise_id, set_index, actual_load_value, actual_load_type, actual_reps, actual_rpe, is_pr")
         .eq("user_id", userId)
         .order("set_index", { ascending: true }),
-      supabase.from("exercises").select("id, name").eq("user_id", userId),
+      supabase.from("exercises").select("id, name, category").eq("user_id", userId),
       supabase.from("program_days").select("id, day_index, label, program_id").eq("user_id", userId),
     ]);
 
@@ -225,7 +348,11 @@ export async function loadShareContext(supabase: Supa, userId: string): Promise<
   }
 
   const names = new Map<string, string>();
-  for (const e of exRows ?? []) names.set(e.id as string, e.name as string);
+  const groups = new Map<string, MuscleGroup>();
+  for (const e of exRows ?? []) {
+    names.set(e.id as string, e.name as string);
+    groups.set(e.id as string, asGroup(e.category));
+  }
   const days = new Map<string, DayRow>();
   for (const d of dayRows ?? [])
     days.set(d.id as string, {
@@ -242,6 +369,8 @@ export async function loadShareContext(supabase: Supa, userId: string): Promise<
     sets,
     setsBySession,
     names,
+    groups,
+    goalLabel,
     days,
     week: null,
     weekPr: null,
@@ -320,10 +449,8 @@ function sessionCard(ctx: ShareContext, sess: SessionRow): { card: SessionCardDa
   const title = sessionTitle(ctx, sess);
   const current = inCurrentWeek(ctx, sess.at);
   const week = current && ctx.status ? ctx.status.week : null;
-  const day = sess.dayId ? ctx.days.get(sess.dayId) : undefined;
-  const programName =
-    current && ctx.status && day && day.program_id === ctx.status.program.id ? ctx.status.program.name : null;
-  const subline = [week != null ? `Week ${week}` : null, programName].filter(Boolean).join(" · ") || null;
+  // "Week 2 · Lose fat" — the program's name is long, so it stays off the card.
+  const subline = [week != null ? `Week ${week}` : null, ctx.goalLabel].filter(Boolean).join(" · ") || null;
 
   const stats: ShareStat[] = [];
   const vol = volumeStat(volumeOf(sets));
@@ -333,17 +460,28 @@ function sessionCard(ctx: ShareContext, sess: SessionRow): { card: SessionCardDa
   const rpe = avgRpe(sets);
   if (rpe != null) stats.push({ label: "AVG RPE", value: rpe.toFixed(1) });
 
-  // Top set per exercise, in the order the exercises were logged.
-  const top = new Map<string, SetRow>();
-  for (const s of sets) {
-    const cur = top.get(s.exId);
-    if (!cur || better(s, cur)) top.set(s.exId, s);
-  }
-  const topSets = Array.from(top.entries())
-    .map(([exId, s]) => ({ name: ctx.names.get(exId) ?? "Exercise", value: formatSet(s) }))
-    .filter((r) => r.value);
-
   const prs = findPRs(ctx.sets, (s) => s.sessionId === sess.id, sess.at);
+  const prIds = new Set(prs.map((p) => p.exId));
+
+  // Best set per exercise, in the order the exercises were logged. Exercises
+  // with nothing to show (no load, no reps) are left off.
+  const top = topSets(sets);
+  for (const [exId, s] of Array.from(top.entries())) if (!formatSet(s)) top.delete(exId);
+  const lifts: SessionLift[] = Array.from(top.entries()).map(([exId, s]) => {
+    const own = sets.filter((x) => x.exId === exId);
+    return {
+      name: ctx.names.get(exId) ?? "Exercise",
+      group: ctx.groups.get(exId) ?? "other",
+      value: formatSet(s),
+      volume: volumeOf(own),
+      sets: own.length,
+      pr: prIds.has(exId),
+    };
+  });
+
+  const earlier = earlierSameDay(ctx, sess);
+  const last = earlier[earlier.length - 1];
+  const first = earlier[0];
   return {
     card: {
       dateLabel: `${dp.wd} · ${dp.day} ${dp.mon} ${dp.year}`,
@@ -353,7 +491,12 @@ function sessionCard(ctx: ShareContext, sess: SessionRow): { card: SessionCardDa
       subline,
       week,
       stats,
-      topSets,
+      lifts,
+      firstLabel: sess.dayId ? "FIRST TIME" : "THIS SESSION",
+      compare: {
+        last: last ? compareWith(ctx, top, last.id) : null,
+        week1: first ? compareWith(ctx, top, first.id) : null,
+      },
       prNames: prs.map((p) => ctx.names.get(p.exId) ?? "Lift"),
       note: sess.note,
     },

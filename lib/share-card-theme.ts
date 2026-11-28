@@ -2,7 +2,8 @@
 //
 // Canvas can't read CSS tokens, so the card palette lives here as named
 // constants — the ONE place outside app/globals.css where hex is allowed
-// (approved mocks: CardSession / CardWeek / CardPhoto, Nov 2026).
+// (approved mocks: CardSession / CardWeek / CardPhoto, Nov 2026; session v2:
+// CardSessionWins / CardSessionMuscle / CardSessionTop3).
 // The UI around the cards (the share sheet) still uses tokens only.
 
 export const CARD_W = 1080; // Instagram Story size
@@ -20,6 +21,7 @@ export type CardTheme = {
   text: string;
   muted: string; // labels, small caps
   sub: string; // secondary sentences
+  soft: string; // quieter body text ("Held steady" names)
   accent: string; // second line of the headline (ember on dark)
   good: string; // "done" numbers, week strip
   pr: string; // PR numbers
@@ -37,6 +39,7 @@ export const DARK: CardTheme = {
   text: "#F4F1EA",
   muted: "#9AA49C",
   sub: "#9AA49C",
+  soft: "#C9CCC6",
   accent: "#E0603A",
   good: "#6FCF97",
   pr: "#F28A68",
@@ -55,6 +58,7 @@ export const PAPER: CardTheme = {
   text: "#16211B",
   muted: "#5A655D",
   sub: "#5A655D",
+  soft: "#3E4942",
   accent: "#C24E2A",
   good: "#1E7A4D",
   pr: "#C24E2A",
@@ -75,6 +79,7 @@ export const PHOTO: CardTheme = {
   text: "#FFFFFF",
   muted: "#C9D2CC",
   sub: "#E8E4DA",
+  soft: "#E8E4DA",
   accent: "#E0603A",
   good: "#6FCF97",
   pr: "#F28A68",

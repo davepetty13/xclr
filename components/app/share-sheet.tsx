@@ -4,30 +4,72 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   cardToBlob,
+  COMPARE_OPTIONS,
   drawCard,
   loadCardFonts,
+  SHOW_MODES,
   type CardBackground,
   type CardFonts,
   type CardKind,
+  type CompareTo,
+  type GainUnit,
   type ShareBundle,
+  type ShowMode,
 } from "@/lib/share-cards";
 import { CARD_H, CARD_W } from "@/lib/share-card-theme";
 
-// Share sheet (v3.8, ShareSheet mock). The card is drawn right here on the
+// Share sheet (v3.8, ShareSheetV2 mock). The card is drawn right here on the
 // phone from the user's own numbers. A chosen photo is only drawn into the
 // canvas — never uploaded, never stored — and is released when the sheet closes.
 
 const TAB_NAME: Record<CardKind, string> = { session: "Session", week: "Week", pr: "PR" };
 const HEADING: Record<CardKind, string> = {
-  session: "Flex your session",
-  week: "Flex your week",
-  pr: "Flex your PR",
+  session: "Share your session",
+  week: "Share your week",
+  pr: "Share your PR",
 };
 const SHARE_TITLE: Record<CardKind, string> = {
   session: "My Xclr session",
   week: "My Xclr week",
   pr: "My new PR on Xclr",
 };
+const STYLES: { value: CardBackground; label: string }[] = [
+  { value: "dark", label: "Dark editorial" },
+  { value: "paper", label: "Paper" },
+  { value: "photo", label: "On your photo" },
+];
+const GAIN_UNITS: { value: GainUnit; label: string }[] = [
+  { value: "pct", label: "%" },
+  { value: "kg", label: "kg" },
+];
+
+// The session card's Show / gains / compare choices, remembered on this phone.
+const PREFS_KEY = "xclr.share.session.v2";
+type Prefs = { show: ShowMode; gainUnit: GainUnit; compareTo: CompareTo };
+const DEFAULT_PREFS: Prefs = { show: "wins", gainUnit: "pct", compareTo: "last" };
+
+function readPrefs(): Prefs {
+  try {
+    const raw = window.localStorage.getItem(PREFS_KEY);
+    if (!raw) return DEFAULT_PREFS;
+    const v = JSON.parse(raw) as Partial<Prefs>;
+    return {
+      show: SHOW_MODES.some((m) => m.value === v.show) ? (v.show as ShowMode) : DEFAULT_PREFS.show,
+      gainUnit: v.gainUnit === "kg" || v.gainUnit === "pct" ? v.gainUnit : DEFAULT_PREFS.gainUnit,
+      compareTo: v.compareTo === "week1" || v.compareTo === "last" ? v.compareTo : DEFAULT_PREFS.compareTo,
+    };
+  } catch {
+    return DEFAULT_PREFS;
+  }
+}
+
+function writePrefs(p: Prefs) {
+  try {
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify(p));
+  } catch {
+    // private mode / storage off: the choice just isn't remembered
+  }
+}
 
 function saveFile(file: File): boolean {
   try {
@@ -65,6 +107,7 @@ export function ShareSheet({
   const [photo, setPhoto] = useState<HTMLImageElement | null>(null);
   const [showNotes, setShowNotes] = useState(false); // off by default (privacy)
   const [showWeight, setShowWeight] = useState(false); // off by default (privacy)
+  const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
   const [fonts, setFonts] = useState<CardFonts | null>(null);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -79,7 +122,18 @@ export function ShareSheet({
   const previewId = useId();
   const [mounted, setMounted] = useState(false);
 
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+    setPrefs(readPrefs());
+  }, []);
+
+  const updatePrefs = useCallback((patch: Partial<Prefs>) => {
+    setPrefs((cur) => {
+      const next = { ...cur, ...patch };
+      writePrefs(next);
+      return next;
+    });
+  }, []);
 
   // Fonts first (Sora 600/700/800 + Hanken Grotesk), then draw.
   useEffect(() => {
@@ -127,26 +181,26 @@ export function ShareSheet({
     setReady(false);
     fileRef.current = null;
     drawCard(ctx, tab, bundle, {
-      background: background === "photo" && !photo ? "dark" : background,
+      background,
       photo,
       showNotes,
       showWeight,
       fonts,
+      show: prefs.show,
+      gainUnit: prefs.gainUnit,
+      compareTo: prefs.compareTo,
     });
     void cardToBlob(canvas).then((blob) => {
       if (gen !== drawGen.current || !blob) return;
       fileRef.current = new File([blob], `xclr-${tab}.png`, { type: "image/png" });
       setReady(true);
     });
-  }, [tab, background, photo, showNotes, showWeight, fonts, bundle, mounted]);
+  }, [tab, background, photo, showNotes, showWeight, prefs, fonts, bundle, mounted]);
 
-  const pickPhoto = useCallback(() => {
-    if (photo && background !== "photo") {
-      setBackground("photo");
-      return;
-    }
-    inputRef.current?.click();
-  }, [photo, background]);
+  function chooseStyle(v: CardBackground) {
+    setBackground(v);
+    if (v === "photo" && !photo) inputRef.current?.click();
+  }
 
   function onPhoto(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
@@ -199,24 +253,18 @@ export function ShareSheet({
     setStatus(saveFile(file) ? "Image saved." : "Couldn't save the image.");
   }
 
-  const noteToggle = tab === "session" && !!bundle.session?.note;
+  const session = bundle.session;
+  const onSession = tab === "session" && !!session;
+  const hasLifts = onSession && session.lifts.length > 0;
+  const canCompare = hasLifts && (session.compare.last != null || session.compare.week1 != null);
+  const showGains = canCompare && prefs.show !== "every";
+  const noteToggle = onSession && !!session.note;
   const weightToggle = tab === "week" && !!bundle.week?.bodyWeight;
 
   if (!mounted) return null;
 
-  const bgButton = (value: CardBackground, label: string, onClick: () => void) => {
-    const active = background === value && (value !== "photo" || !!photo);
-    return (
-      <button
-        type="button"
-        aria-pressed={active}
-        onClick={onClick}
-        className={`${active ? "btn-primary" : "btn-secondary"} w-full text-[13px]`}
-      >
-        {label}
-      </button>
-    );
-  };
+  const selectClass = "field w-full bg-card text-sm font-semibold";
+  const labelClass = "flex min-w-0 flex-col gap-1 text-xs font-bold text-muted";
 
   return createPortal(
     <>
@@ -225,7 +273,7 @@ export function ShareSheet({
         role="dialog"
         aria-modal="true"
         aria-labelledby={headingId}
-        className="pop fixed inset-x-0 bottom-0 z-40 mx-auto flex max-h-[92dvh] w-full max-w-md flex-col gap-3 overflow-y-auto !rounded-b-none px-[18px] pb-[calc(22px+env(safe-area-inset-bottom))] pt-2.5"
+        className="pop fixed inset-x-0 bottom-0 z-40 mx-auto flex max-h-[92dvh] w-full max-w-md flex-col gap-3 overflow-y-auto !rounded-b-none px-4 pb-[calc(18px+env(safe-area-inset-bottom))] pt-2.5"
       >
         <span aria-hidden className="h-1 w-10 shrink-0 self-center rounded-sm bg-line" />
         <div className="flex items-center justify-between gap-3">
@@ -272,76 +320,146 @@ export function ShareSheet({
           </div>
         ) : null}
 
-        <div className="flex items-start gap-3.5">
-          <div className="relative h-[288px] w-[162px] flex-none overflow-hidden rounded-[14px] bg-ink shadow-pop">
-            <canvas
-              id={previewId}
-              ref={canvasRef}
-              width={CARD_W}
-              height={CARD_H}
-              role="img"
-              aria-label={`Preview of the ${TAB_NAME[tab].toLowerCase()} card`}
-              className="h-full w-full"
-            />
-            {!fonts ? (
-              <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-faint">
-                Drawing…
-              </span>
-            ) : null}
-          </div>
-
-          <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-            <span id={`${previewId}-bg`} className="text-xs font-bold text-muted">
-              Background
+        <div className="relative h-[320px] w-[180px] flex-none self-center overflow-hidden rounded-[14px] bg-ink shadow-pop">
+          <canvas
+            id={previewId}
+            ref={canvasRef}
+            width={CARD_W}
+            height={CARD_H}
+            role="img"
+            aria-label={`Preview of the ${TAB_NAME[tab].toLowerCase()} card`}
+            className="h-full w-full"
+          />
+          {!fonts ? (
+            <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-faint">
+              Drawing…
             </span>
-            <div role="group" aria-labelledby={`${previewId}-bg`} className="flex flex-col gap-1.5">
-              {bgButton("dark", "Dark", () => setBackground("dark"))}
-              {bgButton("paper", "Paper", () => setBackground("paper"))}
-              {bgButton(
-                "photo",
-                photo ? (background === "photo" ? "Change photo…" : "My photo") : "My photo…",
-                pickPhoto
-              )}
-              <input
-                ref={inputRef}
-                type="file"
-                accept="image/*"
-                onChange={onPhoto}
-                className="sr-only"
-                tabIndex={-1}
-                aria-hidden="true"
-              />
-            </div>
+          ) : null}
+        </div>
 
-            {noteToggle || weightToggle ? (
-              <>
-                <span className="mt-0.5 text-xs font-bold text-muted">On the card</span>
-                {noteToggle ? (
-                  <label className="flex min-h-[44px] items-center justify-between gap-2 text-[13px] font-medium text-ink">
-                    Session notes
-                    <input
-                      type="checkbox"
-                      checked={showNotes}
-                      onChange={(e) => setShowNotes(e.target.checked)}
-                      className="h-5 w-5 accent-green"
-                    />
-                  </label>
-                ) : null}
-                {weightToggle ? (
-                  <label className="flex min-h-[44px] items-center justify-between gap-2 text-[13px] font-medium text-ink">
-                    Body weight
-                    <input
-                      type="checkbox"
-                      checked={showWeight}
-                      onChange={(e) => setShowWeight(e.target.checked)}
-                      className="h-5 w-5 accent-green"
-                    />
-                  </label>
-                ) : null}
-              </>
+        {hasLifts ? (
+          <label className={labelClass}>
+            Show
+            <select
+              value={prefs.show}
+              onChange={(e) => updatePrefs({ show: e.target.value as ShowMode })}
+              className={selectClass}
+            >
+              {SHOW_MODES.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.value === "wins" && canCompare && prefs.compareTo === "week1" ? "Wins vs Week 1" : m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+
+        {showGains ? (
+          <div className="flex flex-col gap-1">
+            <span id={`${previewId}-gains`} className="text-xs font-bold text-muted">
+              Show gains as
+            </span>
+            <div
+              role="radiogroup"
+              aria-labelledby={`${previewId}-gains`}
+              className="grid grid-cols-2 rounded-control bg-segment p-0.5"
+            >
+              {GAIN_UNITS.map((u) => (
+                <button
+                  key={u.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={prefs.gainUnit === u.value}
+                  onClick={() => updatePrefs({ gainUnit: u.value })}
+                  className={`min-h-[40px] rounded-lg text-[13px] transition-colors ${
+                    prefs.gainUnit === u.value ? "bg-ink font-bold text-card" : "font-semibold text-muted"
+                  }`}
+                >
+                  {u.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div className={`grid gap-2 ${canCompare ? "grid-cols-2" : "grid-cols-1"}`}>
+          <label className={labelClass}>
+            Style
+            <select
+              value={background}
+              onChange={(e) => chooseStyle(e.target.value as CardBackground)}
+              className={selectClass}
+            >
+              {STYLES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {canCompare ? (
+            <label className={labelClass}>
+              Compare to
+              <select
+                value={prefs.compareTo}
+                onChange={(e) => updatePrefs({ compareTo: e.target.value as CompareTo })}
+                className={selectClass}
+              >
+                {COMPARE_OPTIONS.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </div>
+        {background === "photo" ? (
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            className="btn-secondary min-h-[44px] w-full text-[13px]"
+          >
+            {photo ? "Change photo…" : "Choose a photo…"}
+          </button>
+        ) : null}
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*"
+          onChange={onPhoto}
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden="true"
+        />
+
+        {noteToggle || weightToggle ? (
+          <div className="flex flex-col">
+            <span className="text-xs font-bold text-muted">On the card</span>
+            {noteToggle ? (
+              <label className="flex min-h-[44px] items-center justify-between gap-2 text-[13px] font-medium text-ink">
+                Session notes
+                <input
+                  type="checkbox"
+                  checked={showNotes}
+                  onChange={(e) => setShowNotes(e.target.checked)}
+                  className="h-5 w-5 accent-green"
+                />
+              </label>
+            ) : null}
+            {weightToggle ? (
+              <label className="flex min-h-[44px] items-center justify-between gap-2 text-[13px] font-medium text-ink">
+                Body weight
+                <input
+                  type="checkbox"
+                  checked={showWeight}
+                  onChange={(e) => setShowWeight(e.target.checked)}
+                  className="h-5 w-5 accent-green"
+                />
+              </label>
             ) : null}
           </div>
-        </div>
+        ) : null}
 
         <p className="text-[11px] leading-[1.4] text-muted">
           Weight and health notes are never on a card unless you switch them on. Made on your phone from your
@@ -353,7 +471,7 @@ export function ShareSheet({
             {status}
           </p>
         ) : null}
-        <div className="grid grid-cols-[1fr_1.4fr] gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
             onClick={save}
