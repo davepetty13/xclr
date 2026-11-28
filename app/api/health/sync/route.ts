@@ -43,7 +43,8 @@ async function readCapped(request: Request, cap: number): Promise<string | "too_
 
 export async function POST(request: Request) {
   const header = request.headers.get("authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  // Tolerate a key pasted with its own "Bearer " (→ "Bearer Bearer …") or spaces.
+  const token = /^bearer\s/i.test(header) ? header.replace(/^(bearer\s+)+/i, "").trim() : "";
   if (!TOKEN_RE.test(token)) return json(401, { ok: false, error: "Missing or bad sync link." });
 
   const declared = Number(request.headers.get("content-length") ?? "0");
