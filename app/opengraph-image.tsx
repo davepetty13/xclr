@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { ImageResponse } from "next/og";
 
 // Link-preview poster (Messenger, Viber, iMessage, Facebook, X). Design: the
@@ -8,33 +10,25 @@ import { ImageResponse } from "next/og";
 export const alt = "Xclr — Train smarter. Eat on track.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
-export const revalidate = 86400;
 
-// Sora from Google Fonts as TTF (Satori can't read woff2). If the fetch fails
-// the poster still renders in the default sans font.
-async function sora(weight: 700 | 800): Promise<ArrayBuffer | null> {
-  try {
-    const css = await (
-      await fetch(`https://fonts.googleapis.com/css2?family=Sora:wght@${weight}&display=swap`, {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; Xclr-OG/1.0)" },
-      })
-    ).text();
-    const url = css.match(/src:\s*url\(([^)]+)\)\s*format\('(?:truetype|opentype)'\)/)?.[1];
-    if (!url) return null;
-    const res = await fetch(url);
-    return res.ok ? await res.arrayBuffer() : null;
-  } catch {
-    return null;
-  }
-}
+// Fonts ship with the app (app/og-fonts, SIL Open Font License), so the
+// poster always uses Sora + Hanken Grotesk like the app — no download at
+// render time, no fallback font.
+// Node runtime reading the files from disk; next.config.mjs makes sure Vercel
+// ships app/og-fonts with this route.
+const font = (file: string) => readFile(join(process.cwd(), "app", "og-fonts", file));
 
 export default async function OpengraphImage() {
-  const [bold, black] = await Promise.all([sora(700), sora(800)]);
+  const [bold, black, body] = await Promise.all([
+    font("sora-latin-700-normal.woff"),
+    font("sora-latin-800-normal.woff"),
+    font("hanken-grotesk-latin-400-normal.woff"),
+  ]);
   const fonts = [
-    ...(bold ? [{ name: "Sora", data: bold, weight: 700 as const, style: "normal" as const }] : []),
-    ...(black ? [{ name: "Sora", data: black, weight: 800 as const, style: "normal" as const }] : []),
+    { name: "Sora", data: bold, weight: 700 as const, style: "normal" as const },
+    { name: "Sora", data: black, weight: 800 as const, style: "normal" as const },
+    { name: "Hanken Grotesk", data: body, weight: 400 as const, style: "normal" as const },
   ];
-  const display = fonts.length ? "Sora" : "sans-serif";
 
   return new ImageResponse(
     (
@@ -48,7 +42,7 @@ export default async function OpengraphImage() {
           background: "#0B0B0C",
           color: "#F4F1EA",
           padding: "64px 72px",
-          fontFamily: display,
+          fontFamily: "Sora",
         }}
       >
         <div
@@ -96,15 +90,24 @@ export default async function OpengraphImage() {
           <span style={{ color: "#E0603A" }}>Eat on track.</span>
         </div>
         <div style={{ marginTop: 26, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-          <div style={{ display: "flex", fontSize: 30, color: "#C9CCC6", maxWidth: 780, lineHeight: 1.3 }}>
+          <div
+            style={{
+              display: "flex",
+              fontFamily: "Hanken Grotesk",
+              fontSize: 30,
+              color: "#C9CCC6",
+              maxWidth: 780,
+              lineHeight: 1.3,
+            }}
+          >
             Your AI coach for food, training and your Watch — built for Filipino plates.
           </div>
-          <div style={{ display: "flex", fontSize: 22, fontWeight: 700, letterSpacing: "0.14em", color: "#9AA49C" }}>
+          <div style={{ display: "flex", fontSize: 20, fontWeight: 700, letterSpacing: "0.14em", color: "#9AA49C" }}>
             INVITE ONLY
           </div>
         </div>
       </div>
     ),
-    { ...size, fonts: fonts.length ? fonts : undefined }
+    { ...size, fonts }
   );
 }
