@@ -155,7 +155,16 @@ export async function POST(request: Request) {
     workoutsSaved = rows.length;
   }
 
-  return json(200, { ok: true, days: daysSaved, workouts: workoutsSaved, syncs_today: count });
+  const saved = days[0]
+    ? Object.keys(days[0]).filter((k) => k !== "date" && (days[0] as Record<string, unknown>)[k] !== undefined)
+    : [];
+  return json(200, {
+    ok: true,
+    days: daysSaved,
+    workouts: workoutsSaved,
+    syncs_today: count,
+    ...(parsed.payload.received ? { received: parsed.payload.received, saved } : {}),
+  });
 }
 
 export function GET() {

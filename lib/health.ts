@@ -1,4 +1,4 @@
-import { fromShortcutV1 } from "@/lib/health-shortcut";
+import { fromShortcutV1, shortcutCounts } from "@/lib/health-shortcut";
 // Apple Health sync (via iPhone Shortcuts). Pure parsing + small read helpers.
 // Health numbers are personal: nothing here logs a value or a token.
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -71,7 +71,7 @@ export type WorkoutIn = {
 };
 export const HEALTH_SOURCES = ["apple_health", "health_connect", "other"] as const;
 export type HealthSource = (typeof HEALTH_SOURCES)[number];
-export type SyncPayload = { source: HealthSource; days: DayIn[]; workouts: WorkoutIn[] };
+export type SyncPayload = { source: HealthSource; days: DayIn[]; workouts: WorkoutIn[]; received?: Record<string, number> };
 export type ParseResult = { ok: true; payload: SyncPayload } | { ok: false; error: string };
 
 // Shortcuts often sends numbers as text with a unit ("8,412 steps", "71.6 kg").
@@ -224,6 +224,7 @@ function parseWorkout(row: unknown, nowMs: number): WorkoutIn | string | null {
 export function parseSyncBody(body: unknown, today: string, nowMs: number = Date.now()): ParseResult {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "Send a JSON object." };
   const b = { ...(body as Record<string, unknown>) };
+  let received: Record<string, number> | undefined;
 
   // Which app sent it (Shortcuts on iPhone by default; Health Connect on Android).
   let source: HealthSource = "apple_health";
@@ -237,6 +238,7 @@ export function parseSyncBody(body: unknown, today: string, nowMs: number = Date
   // The ready-made Xclr Sync shortcut sends raw sample lists; fold them into
   // the flat one-day shape first.
   if (b.format === "shortcut_v1") {
+    received = shortcutCounts(b);
     const flat = fromShortcutV1(b);
     for (const k of Object.keys(b)) delete b[k];
     Object.assign(b, flat);
@@ -278,7 +280,7 @@ export function parseSyncBody(body: unknown, today: string, nowMs: number = Date
     }
   }
 
-  return { ok: true, payload: { source, days: Array.from(byDate.values()), workouts } };
+  return { ok: true, payload: { source, days: Array.from(byDate.values()), workouts, received } };
 }
 
 function stripUndefined<T extends object>(o: T): Partial<T> {

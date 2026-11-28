@@ -97,6 +97,18 @@ function sleepMinutes(valuesRaw: unknown, durationsRaw: unknown, sourcesRaw: unk
   return Math.min(1440, Math.round(secs / 60));
 }
 
+// How many items each list carried — counts only, never values — so the
+// shortcut's result can show what Apple Health actually handed over.
+export function shortcutCounts(b: Record<string, unknown>): Record<string, number> {
+  const c = (v: unknown) => toList(v)?.filter((x) => x !== "").length ?? 0;
+  return {
+    steps: c(b.steps_values),
+    active: c(b.active_values),
+    sleep: c(b.sleep_values),
+    resting_hr: c(b.resting_hr),
+  };
+}
+
 export function fromShortcutV1(b: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (typeof b.date === "string") out.date = b.date;
