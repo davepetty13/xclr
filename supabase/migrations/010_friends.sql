@@ -87,7 +87,7 @@ as $$
   );
 $$;
 
-revoke all on function public.is_member() from public;
+revoke all on function public.is_member() from public, anon;
 grant execute on function public.is_member() to authenticated;
 
 -- Photo uploads (005_v3.sql "xclr photos own insert" + is_member()).
