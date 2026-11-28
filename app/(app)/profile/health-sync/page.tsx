@@ -79,7 +79,7 @@ export default async function HealthSyncPage() {
         </Link>
         <div>
           <h1 className="font-display text-[21px] font-bold tracking-[-0.02em] text-ink">Watch &amp; phone sync</h1>
-          <p className="text-xs text-muted">Apple Health or Android · free</p>
+          <p className="text-xs text-muted">Apple Watch, Garmin and more · free</p>
         </div>
       </div>
 

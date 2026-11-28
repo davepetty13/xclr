@@ -2,6 +2,9 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { deletePhotoNow } from "@/lib/photos";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { getAccess, normEmail } from "@/lib/access";
+import { deleteUserEverything } from "@/lib/delete-user";
 import {
   SEX_VALUES,
   SPORT_VALUES,
@@ -311,5 +314,28 @@ export async function resolveCondition(id: string): Promise<ProfileResult> {
     .eq("id", id)
     .eq("user_id", s.userId);
   if (error) return { ok: false, error: "Couldn't update that. Try again." };
+  return { ok: true };
+}
+
+// ---- Delete my data and leave Xclr ----
+// Typed confirm ("DELETE"). Removes the storage folder, the auth user (every
+// table cascades from auth.users) and the invite row, then signs out.
+// The owner can't do this here (the page hides it, and this refuses).
+export async function deleteMyData(confirm: string): Promise<ProfileResult> {
+  if (confirm.trim() !== "DELETE") return { ok: false, error: "Type DELETE in capitals to confirm." };
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return SIGNED_OUT;
+  const access = await getAccess(user);
+  if (access?.role === "owner") return { ok: false, error: "The owner can't delete their account here." };
+
+  const r = await deleteUserEverything(createAdminClient(), {
+    userId: user.id,
+    email: access?.email ?? normEmail(user.email),
+  });
+  if (!r.ok) return r;
+  await supabase.auth.signOut().catch(() => undefined);
   return { ok: true };
 }

@@ -2,6 +2,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { anthropic, costUsd, MissingApiKeyError } from "@/lib/anthropic";
 import type { createClient } from "@/lib/supabase/server";
+import { getCoachUse } from "@/lib/ai-limit";
 
 // Optional: record this call's tokens + cost in ai_usage (Goals → AI usage).
 // Best-effort — a failed usage write never fails the AI call.
@@ -34,6 +35,7 @@ export type AiFailureKind =
   | "timeout"
   | "connection"
   | "bad_request"
+  | "limit" // this month's AI limit is used up — the API was NOT called
   | "unknown";
 
 export type AiCallResult =
@@ -116,6 +118,8 @@ export function aiFailureMessage(
       return `The coach took too long to answer and timed out.${tried} Try again.`;
     case "connection":
       return `Couldn't connect to the coach's servers.${tried} Try again in a moment.`;
+    case "limit":
+      return "This month's coach limit is used up. You can still log food, workouts and Watch data — saved meals and quick logs don't use the coach.";
     case "bad_request":
       return `The coach rejected the request${code} — that's a bug on our side and it's been logged.`;
     default:
@@ -134,6 +138,17 @@ export async function createMessage(
   params: Anthropic.MessageCreateParamsNonStreaming,
   opts: { label: string; deadline: number; track?: UsageTrack }
 ): Promise<AiCallResult> {
+  // Monthly AI limit (lib/ai-limit.ts): every user-triggered call carries
+  // `track`, so this one guard covers chat, photo reads, program builds and
+  // weekly reviews. Over the limit → the API is never called.
+  if (opts.track) {
+    const use = await getCoachUse(opts.track.supabase, opts.track.userId);
+    if (use.limited) {
+      console.warn(`[ai:${opts.label}] monthly limit reached user=${opts.track.userId} spend=$${use.spend.toFixed(4)} limit=$${use.limit}`);
+      return { ok: false, kind: "limit", status: null, error: use.message };
+    }
+  }
+
   let last: Classified | null = null;
   let attempts = 0;
 

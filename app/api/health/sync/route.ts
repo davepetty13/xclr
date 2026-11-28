@@ -74,6 +74,15 @@ export async function POST(request: Request) {
   if (!tok) return json(401, { ok: false, error: "This sync link isn't valid any more. Make a new one in Xclr." });
   const userId = tok.user_id as string;
 
+  // Invite-only (migration 010): a paused person's shortcut stops too.
+  const { data: member } = await admin
+    .from("app_members")
+    .select("role, status")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!member || (member.role !== "owner" && member.status !== "active"))
+    return json(403, { ok: false, error: "Your Xclr access is paused. Ask Dave to resume it." });
+
   const { data: profile } = await admin
     .from("profiles")
     .select("timezone, health_sync_fields")

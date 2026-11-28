@@ -20,10 +20,11 @@ export default async function ProgramPage() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("display_name, height_cm, primary_goal, training_notes")
+    .select("display_name, height_cm, primary_goal, training_notes, privacy_accepted_at")
     .eq("id", user.id)
     .single();
 
+  if (!profile?.privacy_accepted_at) redirect("/welcome");
   // Must have finished onboarding to have inputs to generate from.
   if (!isOnboarded(profile)) redirect("/onboarding");
 

@@ -13,6 +13,9 @@ export type Msg =
 
 export type QuickChip = { id: string; label: string };
 
+// This month's AI use, passed only at ≥80% of the limit (never for the owner).
+export type CoachUseNote = { pct: number; limited: boolean; message: string };
+
 export function ChatTab({
   userId,
   coachName,
@@ -22,6 +25,7 @@ export function ChatTab({
   today,
   initialTotals,
   unit = "kg",
+  coachUse = null,
 }: {
   userId: string;
   coachName: string;
@@ -31,6 +35,7 @@ export function ChatTab({
   today: string;
   initialTotals: { kcal: number; protein: number };
   unit?: WeightUnit;
+  coachUse?: CoachUseNote | null;
 }) {
   const router = useRouter();
   const [messages, setMessages] = useState<Msg[]>(initialMessages);
@@ -39,6 +44,8 @@ export function ChatTab({
   const [busy, setBusy] = useState(false);
   const [totals, setTotals] = useState(initialTotals);
   const [error, setError] = useState<string | null>(null);
+  // Set when the server says the limit is used up (or it already was on load).
+  const [limitMsg, setLimitMsg] = useState<string | null>(coachUse?.limited ? coachUse.message : null);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -108,6 +115,9 @@ export function ChatTab({
       setTotals({ kcal: result.kcal_today, protein: result.protein_today });
       router.refresh();
       scrollDown();
+    } else if (result.limited) {
+      setLimitMsg(result.error);
+      scrollDown();
     } else {
       setError(result.error);
     }
@@ -176,6 +186,14 @@ export function ChatTab({
           </div>
         ) : null}
         <div ref={endRef} />
+
+        {limitMsg ? <CoachLimit message={limitMsg} pct={Math.max(100, coachUse?.pct ?? 100)} /> : null}
+        {!limitMsg && coachUse ? (
+          <p className="px-1 text-xs text-muted">
+            You&apos;ve used <span className="tnum font-semibold text-ink">{coachUse.pct}%</span> of this month&apos;s
+            coach limit. Logging saved meals and quick logs doesn&apos;t use it.
+          </p>
+        ) : null}
 
         {error ? (
           <p role="alert" className="pop px-4 py-3 text-sm font-medium text-ink shadow-[inset_3px_0_0_var(--ember),var(--shadow-pop)]">
@@ -288,5 +306,29 @@ export function ChatTab({
         </form>
       </div>
     </main>
+  );
+}
+
+// "This month's coach limit is used up" + the use bar (CoachLimit mock).
+function CoachLimit({ message, pct }: { message: string; pct: number }) {
+  const [head, ...rest] = message.split(". ");
+  return (
+    <div className="flex flex-col gap-2.5" role="status">
+      <section className="flex flex-col gap-1.5 rounded-tile bg-amber-soft px-[15px] py-[13px] text-amber-text">
+        <h2 className="text-[15px] font-bold text-ink">{head}</h2>
+        <p className="text-[13px] leading-[1.45]">{rest.join(". ")}</p>
+      </section>
+      <section className="glass flex items-center justify-between gap-3 px-3.5 py-3">
+        <div>
+          <p className="text-xs text-muted">Coach use this month</p>
+          <p className="tnum font-display text-lg font-bold text-ink">
+            {pct}%<span className="text-xs font-normal text-muted"> of your limit</span>
+          </p>
+        </div>
+        <div className="h-2 w-[110px] shrink-0 rounded bg-band-track" aria-hidden="true">
+          <div className="h-2 rounded bg-ember-text" style={{ width: `${Math.min(100, pct)}%` }} />
+        </div>
+      </section>
+    </div>
   );
 }

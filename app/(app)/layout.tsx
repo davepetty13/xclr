@@ -7,7 +7,8 @@ import { ServiceWorkerRegister } from "@/components/app/sw-register";
 import { getCurrentUser } from "@/lib/session";
 
 // The 5-tab app shell. Gating lives here so every tab is protected once:
-// signed in → onboarded → has an active program → into the app.
+// signed in (+ invited, middleware) → privacy welcome → onboarded → has an
+// active program → into the app.
 export default async function AppLayout({
   children,
 }: {
@@ -19,10 +20,13 @@ export default async function AppLayout({
 
   // Both checks at once instead of one after the other.
   const [{ data: profile }, hasProgram] = await Promise.all([
-    supabase.from("profiles").select("display_name, height_cm").eq("id", user.id).single(),
+    supabase.from("profiles").select("display_name, height_cm, privacy_accepted_at").eq("id", user.id).single(),
     hasActiveProgram(supabase, user.id),
   ]);
 
+  // Privacy welcome once, before onboarding (migration 010). Membership itself
+  // is checked per request in middleware.ts.
+  if (!profile?.privacy_accepted_at) redirect("/welcome");
   if (!isOnboarded(profile)) redirect("/onboarding");
   if (!hasProgram) redirect("/program");
 

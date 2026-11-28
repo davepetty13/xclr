@@ -3,7 +3,8 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { MODELS, type ModelJob } from "@/lib/anthropic";
 import { createMessage, type UsageTrack } from "@/lib/ai-call";
 
-export type AiJsonResult = { ok: true; data: unknown } | { ok: false; error: string };
+// `limited` = this month's AI limit is used up (the API was not called).
+export type AiJsonResult = { ok: true; data: unknown } | { ok: false; error: string; limited?: boolean };
 
 // Get strict JSON from Claude via FORCED TOOL USE.
 //
@@ -59,7 +60,7 @@ export async function generateJson(opts: {
       track: opts.track ? { ...opts.track, label: opts.job } : undefined,
     }
   );
-  if (!r.ok) return { ok: false, error: r.error };
+  if (!r.ok) return { ok: false, error: r.error, ...(r.kind === "limit" ? { limited: true } : {}) };
   const message = r.message;
   const tag = `[generateJson:${opts.toolName}]`;
 

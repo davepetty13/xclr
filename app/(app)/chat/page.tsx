@@ -5,6 +5,7 @@ import { readMeta } from "@/lib/chat-library";
 import { getUserTz } from "@/lib/goal-change";
 import { todayWindow } from "@/lib/time";
 import { getCurrentUser } from "@/lib/session";
+import { getCoachUse } from "@/lib/ai-limit";
 
 // sendChatMessage can make two sequential Anthropic calls (parse + coach) with
 // retries on 429/529. Route-segment maxDuration on the page governs the Server
@@ -26,6 +27,9 @@ export default async function ChatPage() {
 
   const tz = await getUserTz(supabase, user.id);
   const win = todayWindow(tz);
+  // Monthly AI limit: shown only from 80% (owner has none).
+  const use = await getCoachUse(supabase, user.id, tz);
+  const coachUse = !use.owner && use.pct >= 80 ? { pct: use.pct, limited: use.limited, message: use.message } : null;
 
   // Quick-log chips: the user's most-logged dishes (tap = log, no AI).
   const { data: lib } = await supabase
@@ -81,6 +85,7 @@ export default async function ChatPage() {
       today={win.date}
       initialTotals={totals}
       unit={profile?.weight_unit === "lbs" ? "lbs" : "kg"}
+      coachUse={coachUse}
     />
   );
 }

@@ -37,6 +37,7 @@ export async function middleware(request: NextRequest) {
   // called by an iPhone Shortcut and checks its own sync-link token.
   const isPublic =
     path === "/login" ||
+    path === "/not-invited" ||
     path.startsWith("/auth/") ||
     path === "/api/cron/photo-cleanup" ||
     path === "/api/cron/notify" ||
@@ -47,6 +48,34 @@ export async function middleware(request: NextRequest) {
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
+  // Invite-only: a signed-in user must be the owner or an active member
+  // (app_members, migration 010). Read through RLS — a user can only see their
+  // own row — so this is one small query per request and needs no secret key.
+  // Paused / removed people lose access on their very next request.
+  if (user && !isPublic) {
+    const { data: rows, error } = await supabase
+      .from("app_members")
+      .select("role, status")
+      .limit(1);
+    if (error) {
+      // Fail open on a database hiccup so the owner isn't locked out by a
+      // blip; every AI call still requires a member row (lib/ai-limit.ts).
+      console.error(`[middleware] member check failed: ${error.message}`);
+    } else {
+      const row = rows?.[0];
+      const allowed = !!row && (row.role === "owner" || row.status === "active");
+      if (!allowed) {
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          return NextResponse.json({ error: "Not invited" }, { status: 403 });
+        }
+        const url = request.nextUrl.clone();
+        url.pathname = "/not-invited";
+        url.search = "";
+        return NextResponse.redirect(url);
+      }
+    }
+  }
+
   if (user && path.startsWith("/login")) {
     const url = request.nextUrl.clone();
     url.pathname = "/";

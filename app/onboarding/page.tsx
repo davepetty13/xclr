@@ -11,10 +11,11 @@ export default async function OnboardingPage() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("display_name, height_cm")
+    .select("display_name, height_cm, privacy_accepted_at")
     .eq("id", user.id)
     .single();
 
+  if (!profile?.privacy_accepted_at) redirect("/welcome");
   // Already onboarded → nothing to do here.
   if (isOnboarded(profile)) redirect("/");
 

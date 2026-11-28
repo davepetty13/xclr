@@ -7,6 +7,8 @@ import { ProfileTrainingForm } from "@/components/app/profile-training-form";
 import { ProfileSettingsForm } from "@/components/app/profile-settings-form";
 import { ProfileHealth, type HealthItem } from "@/components/app/profile-health";
 import { getCurrentUser } from "@/lib/session";
+import { getCurrentAccess } from "@/lib/access";
+import { DeleteMyData } from "@/components/app/delete-my-data";
 
 const SOURCE_LABEL: Record<string, string> = {
   chat: "Added from chat",
@@ -24,7 +26,7 @@ export default async function ProfilePage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const [{ data: p }, { data: latest }] = await Promise.all([
+  const [{ data: p }, { data: latest }, access] = await Promise.all([
     supabase
       .from("profiles")
       .select(
@@ -39,7 +41,9 @@ export default async function ProfilePage() {
       .order("measured_on", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    getCurrentAccess().catch(() => null),
   ]);
+  const owner = access?.role === "owner";
 
   const tz = (p?.timezone as string | null) ?? DEFAULT_TZ;
   const unit: "kg" | "lbs" = p?.weight_unit === "lbs" ? "lbs" : "kg";
@@ -156,6 +160,23 @@ export default async function ProfilePage() {
         </div>
       </section>
 
+      {owner ? (
+        <section aria-labelledby="people-h" className="flex flex-col gap-2">
+          <h2 id="people-h" className="px-1 pt-1 text-xs font-bold text-muted">
+            Friends on Xclr
+          </h2>
+          <Link href="/profile/people" className="glass flex min-h-[56px] items-center justify-between gap-3 px-4 py-2 text-ink">
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold">People</span>
+              <span className="block text-xs text-muted">Invite friends, see AI cost, pause or remove</span>
+            </span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="shrink-0 text-muted">
+              <path d="M9 6l6 6-6 6" />
+            </svg>
+          </Link>
+        </section>
+      ) : null}
+
       <section aria-labelledby="your-data-h" className="flex flex-col gap-2">
         <h2 id="your-data-h" className="px-1 pt-1 text-xs font-bold text-muted">
           Your data
@@ -166,6 +187,7 @@ export default async function ProfilePage() {
             Download my data
           </a>
         </div>
+        {owner ? null : <DeleteMyData />}
       </section>
     </main>
   );

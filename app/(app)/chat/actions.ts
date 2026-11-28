@@ -52,7 +52,8 @@ export type ChatResult =
       kcal_today: number;
       protein_today: number;
     }
-  | { ok: false; error: string };
+  // limited = this month's AI limit is used up (nothing was sent to the AI).
+  | { ok: false; error: string; limited?: boolean };
 
 export type SimpleResult = { ok: true } | { ok: false; error: string };
 
@@ -458,7 +459,7 @@ async function askCoach(
   text: string,
   ctx: CoachContext,
   deadline: number
-): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; text: string } | { ok: false; error: string; limited?: boolean }> {
   const coach = await createMessage(
     {
       model: MODELS.coach,
@@ -469,7 +470,7 @@ async function askCoach(
     },
     { label: "coach reply", deadline, track: { supabase, userId, label: "coach" } }
   );
-  if (!coach.ok) return { ok: false, error: coach.error };
+  if (!coach.ok) return { ok: false, error: coach.error, limited: coach.kind === "limit" };
   const t = coach.message.content.find((b) => b.type === "text");
   const out = t && t.type === "text" ? t.text.trim() : "";
   if (out) return { ok: true, text: out };
@@ -553,7 +554,7 @@ export async function sendChatMessage(text: string, mode: ChatMode = "log"): Pro
       effort: "low",
       track: { supabase, userId },
     });
-    if (!parseResult.ok) return { ok: false, error: parseResult.error };
+    if (!parseResult.ok) return { ok: false, error: parseResult.error, limited: parseResult.limited };
     parsed = normalizeParse(parseResult.data);
 
     // A correction updates the old row — never also log the same item again.
@@ -958,7 +959,7 @@ export async function sendChatMessage(text: string, mode: ChatMode = "log"): Pro
       reply = coach.text;
     } else if (!wroteSomething) {
       // Nothing was written this turn → fail loudly so it's safe to resend.
-      return { ok: false, error: coach.error };
+      return { ok: false, error: coach.error, limited: coach.limited };
     } else {
       reply = `${reply} No reply to your question this time — ${coach.error}`.trim();
     }
