@@ -21,6 +21,9 @@ const USER_TABLES = [
   "pending_changes",
 ] as const;
 
+// Added in migration 008. Skipped (not fatal) if that migration hasn't run.
+const OPTIONAL_TABLES = ["health_daily", "health_workouts", "notification_prefs", "notifications"] as const;
+
 // GET /profile/export — the signed-in user's own rows as a JSON download.
 export async function GET() {
   const supabase = createClient();
@@ -52,6 +55,13 @@ export async function GET() {
     }
     out[USER_TABLES[i]] = r.data ?? [];
   }
+
+  const optional = await Promise.all(
+    OPTIONAL_TABLES.map((t) => supabase.from(t).select("*").eq("user_id", user.id).limit(50000))
+  );
+  OPTIONAL_TABLES.forEach((t, i) => {
+    if (!optional[i].error) out[t] = optional[i].data ?? [];
+  });
 
   // Health notes only when consent is on.
   if (profile?.health_data_consent_at) {

@@ -19,6 +19,7 @@ import {
   type ReviewContext,
   type ReviewExercise,
 } from "@/lib/review-prompt";
+import { healthAverages } from "@/lib/health";
 
 export type SimpleResult = { ok: true } | { ok: false; error: string };
 
@@ -340,9 +341,10 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
   const sleepVals = (sleepRows ?? [])
     .map((s) => Number(s.duration_min))
     .filter((n) => Number.isFinite(n) && n > 0);
+  const activity = await healthAverages(supabase, user.id, fromDate, toDate ?? null);
   const avgSleep = sleepVals.length
     ? sleepVals.reduce((a, b) => a + b, 0) / sleepVals.length
-    : null;
+    : activity?.avg_sleep_min ?? null;
 
   const { data: weightRows } = await supabase
     .from("weights")
@@ -364,6 +366,7 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
     skipped,
     avg_sleep_min: avgSleep,
     weight_trend: weightTrend,
+    activity,
   };
 
   const r = await generateJson({

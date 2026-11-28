@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { isOnboarded } from "@/lib/onboarding";
 import { hasActiveProgram } from "@/lib/programs";
 import { BottomNav } from "@/components/app/bottom-nav";
+import { ServiceWorkerRegister } from "@/components/app/sw-register";
 import { getCurrentUser } from "@/lib/session";
 
 // The 5-tab app shell. Gating lives here so every tab is protected once:
@@ -31,6 +32,7 @@ export default async function AppLayout({
     <div className="mx-auto min-h-screen w-full max-w-md pb-[calc(5rem+env(safe-area-inset-bottom))]">
       {children}
       <BottomNav />
+      <ServiceWorkerRegister />
     </div>
   );
 }

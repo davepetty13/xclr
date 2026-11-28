@@ -32,10 +32,15 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  // /api/cron is called by Vercel Cron without a session; the route checks
-  // its own CRON_SECRET bearer token.
+  // /api/cron/* is called by Vercel Cron / Supabase pg_cron without a session;
+  // each route checks its own CRON_SECRET bearer token. /api/health/sync is
+  // called by an iPhone Shortcut and checks its own sync-link token.
   const isPublic =
-    path === "/login" || path.startsWith("/auth/") || path === "/api/cron/photo-cleanup";
+    path === "/login" ||
+    path.startsWith("/auth/") ||
+    path === "/api/cron/photo-cleanup" ||
+    path === "/api/cron/notify" ||
+    path === "/api/health/sync";
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone();
@@ -53,8 +58,9 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Icons must load without a session (iPhone fetches the home-screen icon
-    // on its own, signed out), so they skip the sign-in check.
-    "/((?!_next/static|_next/image|favicon.ico|apple-icon|icon|apple-touch-icon|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    // Icons, the web-app manifest and the service worker must load without a
+    // session (iPhone fetches them on its own, signed out), so they skip the
+    // sign-in check.
+    "/((?!_next/static|_next/image|favicon.ico|apple-icon|icon|apple-touch-icon|manifest.webmanifest|sw.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

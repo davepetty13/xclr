@@ -130,6 +130,32 @@ export default async function ProfilePage() {
 
       <ProfileSettingsForm initial={{ weight_unit: unit, timezone: tz }} />
 
+      <section aria-labelledby="phone-h" className="flex flex-col gap-2">
+        <h2 id="phone-h" className="px-1 pt-1 text-xs font-bold text-muted">
+          Phone &amp; Watch
+        </h2>
+        <div className="glass px-4 py-0.5">
+          {[
+            { href: "/profile/health-sync", title: "Watch & phone sync", hint: "Apple Health or Android · steps, burn, sleep" },
+            { href: "/profile/notifications", title: "Notifications", hint: "Reminders on this iPhone and in the bell" },
+          ].map((l, i) => (
+            <Link
+              key={l.href}
+              href={l.href}
+              className={`flex min-h-[56px] items-center justify-between gap-3 py-2 text-ink ${i === 0 ? "border-b border-hairline" : ""}`}
+            >
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">{l.title}</span>
+                <span className="block text-xs text-muted">{l.hint}</span>
+              </span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="shrink-0 text-muted">
+                <path d="M9 6l6 6-6 6" />
+              </svg>
+            </Link>
+          ))}
+        </div>
+      </section>
+
       <section aria-labelledby="your-data-h" className="flex flex-col gap-2">
         <h2 id="your-data-h" className="px-1 pt-1 text-xs font-bold text-muted">
           Your data
