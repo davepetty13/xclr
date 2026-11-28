@@ -19,8 +19,21 @@ const hanken = Hanken_Grotesk({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.APP_URL || "https://xclr.vercel.app"),
   title: "Xclr",
   description: "Personal health & wellness with an AI coach at its core.",
+  // Link previews (the poster itself is app/opengraph-image.tsx).
+  openGraph: {
+    title: "Xclr — your AI health coach",
+    description: "Train smarter. Eat on track. Food, training and your Watch in one place — invite only.",
+    siteName: "Xclr",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Xclr — your AI health coach",
+    description: "Train smarter. Eat on track. Food, training and your Watch in one place — invite only.",
+  },
   // Home Screen web app (needed for iPhone notifications, iOS 16.4+).
   appleWebApp: { capable: true, title: "Xclr", statusBarStyle: "default" },
 };

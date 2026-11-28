@@ -108,9 +108,9 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Icons, the web-app manifest and the service worker must load without a
+    // Icons, the link-preview poster, the web-app manifest and the service worker must load without a
     // session (iPhone fetches them on its own, signed out), so they skip the
     // sign-in check.
-    "/((?!_next/static|_next/image|favicon.ico|apple-icon|icon|apple-touch-icon|manifest.webmanifest|sw.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|apple-icon|icon|apple-touch-icon|opengraph-image|twitter-image|manifest.webmanifest|sw.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };
