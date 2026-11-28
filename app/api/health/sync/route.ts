@@ -22,7 +22,7 @@ function json(status: number, body: Record<string, unknown>) {
 }
 
 // Read the body with a running byte cap, so a huge or endless upload stops at
-// 64 KB instead of being buffered first.
+// LIMITS.bodyBytes instead of being buffered first.
 async function readCapped(request: Request, cap: number): Promise<string | "too_big"> {
   if (!request.body) return "";
   const reader = request.body.getReader();

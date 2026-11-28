@@ -146,7 +146,7 @@ export function HealthSyncPanel({
   }
 
   async function copyBit(what: "url" | "token") {
-    const text = what === "url" ? endpoint : `Bearer ${token ?? ""}`;
+    const text = what === "url" ? endpoint : token ?? "";
     setCopied((await copy(text)) ? what : null);
   }
 
@@ -233,14 +233,14 @@ export function HealthSyncPanel({
               </button>
             </div>
             <div className="flex items-center gap-2">
-              <code className="min-w-0 flex-1 break-all text-xs text-ink">Bearer {token}</code>
+              <code className="min-w-0 flex-1 break-all text-xs text-ink">{token}</code>
               <button type="button" onClick={() => void copyBit("token")} className="btn-secondary min-h-10 shrink-0 px-3 text-xs">
                 {copied === "token" ? "Copied" : "Copy key"}
               </button>
             </div>
             <p className="text-[11px] text-muted">
-              Paste the URL into &ldquo;Get Contents of URL&rdquo;, and the key (with the word Bearer) as the
-              Authorization header. Xclr can&apos;t show this key again.
+              Tap <strong>Copy key</strong> and paste it when the Xclr Sync shortcut asks. Xclr can&apos;t show this
+              key again.
             </p>
           </div>
         ) : null}
@@ -343,9 +343,44 @@ export function HealthSyncPanel({
   );
 }
 
+// Set NEXT_PUBLIC_XCLR_SHORTCUT_URL to the iCloud link of the ready-made
+// "Xclr Sync" shortcut to show a one-tap "Add the Xclr shortcut" button.
+const SHORTCUT_URL = process.env.NEXT_PUBLIC_XCLR_SHORTCUT_URL ?? "";
+
 function ShortcutSteps() {
   return (
     <div id="shortcut-steps" className="flex flex-col gap-3 border-t border-hairline pt-3 text-[13px] leading-relaxed text-ink">
+      <div>
+        <p className="text-xs font-bold text-muted">Quick setup (about 1 minute)</p>
+        <ol className="mt-1.5 flex list-decimal flex-col gap-1.5 pl-5">
+          <li>
+            Tap <strong>Copy my sync link</strong> above, then <strong>Copy key</strong>.
+          </li>
+          <li>
+            {SHORTCUT_URL ? (
+              <>
+                Tap{" "}
+                <a href={SHORTCUT_URL} className="font-semibold text-green underline" target="_blank" rel="noreferrer">
+                  Add the Xclr shortcut
+                </a>{" "}
+                → <strong>Add Shortcut</strong>, and paste your key when it asks.
+              </>
+            ) : (
+              <>Open the Xclr Sync shortcut file and tap <strong>Add Shortcut</strong>. Paste your key when it asks.</>
+            )}
+          </li>
+          <li>
+            Run it once and tap <strong>Allow</strong> when iPhone asks to read Health. You should see{" "}
+            <em>&ldquo;ok&rdquo;: true</em>.
+          </li>
+          <li>
+            Shortcuts → <strong>Automation</strong> → <strong>+</strong> → <strong>Time of Day</strong> → 12:00 PM, Daily →{" "}
+            <strong>Run Immediately</strong> → pick <em>Xclr Sync</em>. Repeat for 6:00 PM and 9:30 PM.
+          </li>
+        </ol>
+      </div>
+      <details>
+        <summary className="min-h-10 cursor-pointer py-2 text-xs font-bold text-muted">Or build it by hand</summary>
       <div>
         <p className="text-xs font-bold text-muted">1 · Build the shortcut (once)</p>
         <p className="mt-1">
@@ -388,7 +423,7 @@ function ShortcutSteps() {
           </li>
           <li>
             <strong>Get Contents of URL</strong> → paste your sync URL. Tap <em>Show More</em>: Method <em>POST</em>;
-            Headers: add <em>Authorization</em> = your key (starts with Bearer); Request Body <em>JSON</em> with:
+            Headers: add <em>Authorization</em> = the word <em>Bearer</em>, a space, then your key; Request Body <em>JSON</em> with:
             <code className="mt-1 block whitespace-pre-wrap rounded-lg bg-field p-2 text-xs">
               {`date = Today
 steps = Steps
@@ -423,6 +458,8 @@ workouts = Workouts   (type: Array)`}
           </li>
         </ol>
       </div>
+
+      </details>
 
       <p className="rounded-lg bg-amber-soft p-2.5 text-xs text-amber-text">
         Heads up: iPhone keeps Health data locked while the phone is locked. If an automation runs while your iPhone is

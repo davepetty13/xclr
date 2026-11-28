@@ -1,3 +1,4 @@
+import { fromShortcutV1 } from "@/lib/health-shortcut";
 // Apple Health sync (via iPhone Shortcuts). Pure parsing + small read helpers.
 // Health numbers are personal: nothing here logs a value or a token.
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -40,7 +41,7 @@ export function readHealthFields(v: unknown): HealthFields {
 
 // Limits (match the CHECKs in migration 008).
 export const LIMITS = {
-  bodyBytes: 64 * 1024,
+  bodyBytes: 512 * 1024, // the ready-made shortcut sends raw sample lists (a busy day is ~100 KB)
   days: 14,
   workouts: 50,
   steps: [0, 200_000],
@@ -232,6 +233,15 @@ export function parseSyncBody(body: unknown, today: string, nowMs: number = Date
     source = b.source as HealthSource;
   }
   delete b.source;
+
+  // The ready-made Xclr Sync shortcut sends raw sample lists; fold them into
+  // the flat one-day shape first.
+  if (b.format === "shortcut_v1") {
+    const flat = fromShortcutV1(b);
+    for (const k of Object.keys(b)) delete b[k];
+    Object.assign(b, flat);
+  }
+  delete b.format;
 
   let dayRows: unknown[];
   if (b.days !== undefined) {
