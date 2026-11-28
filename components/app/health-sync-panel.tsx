@@ -374,8 +374,20 @@ function ShortcutSteps() {
             <em>&ldquo;ok&rdquo;: true</em>.
           </li>
           <li>
-            Shortcuts → <strong>Automation</strong> → <strong>+</strong> → <strong>Time of Day</strong> → 12:00 PM, Daily →{" "}
-            <strong>Run Immediately</strong> → pick <em>Xclr Sync</em>. Repeat for 6:00 PM and 9:30 PM.
+            Make it run on its own. In Shortcuts → <strong>Automation</strong> → <strong>+</strong>, add these three, each
+            set to <strong>Run Immediately</strong> → <em>Xclr Sync</em> (turn off <em>Notify When Run</em>):
+            <ul className="mt-1 flex list-disc flex-col gap-1 pl-5">
+              <li>
+                <strong>App</strong> → an app you open often (Messenger, Instagram) → <em>Is Opened</em>. Syncs whenever
+                your phone is unlocked, so it almost never misses.
+              </li>
+              <li>
+                <strong>Sleep</strong> → <em>Wake Up</em>. Last night&apos;s sleep arrives first thing.
+              </li>
+              <li>
+                <strong>Time of Day</strong> → 9:30 PM, Daily. An end-of-day catch-up.
+              </li>
+            </ul>
           </li>
         </ol>
       </div>
