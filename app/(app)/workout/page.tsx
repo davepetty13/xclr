@@ -1,13 +1,16 @@
-import { prettyDate } from "@/lib/time";
+import { prettyDate, todayLocal } from "@/lib/time";
 import { createClient } from "@/lib/supabase/server";
-import { getWeekStatus } from "@/lib/programs";
+import { getDayPlan, getWeekStatus } from "@/lib/programs";
 import { getUserTz } from "@/lib/goal-change";
 import { LogSession, type LogExercise } from "@/components/app/log-session";
-import type { LoadType } from "@/lib/program-schema";
+import { homeSwapFor, normalizeEquipment } from "@/lib/home-swaps";
 import { SkipDay } from "./skip-day";
 import { DayPicker } from "./day-picker";
 import { UnsavedDrafts } from "./unsaved-drafts";
 import { NewWeek } from "./new-week";
+import { EditDay } from "./edit-day";
+import { AtHome } from "./at-home";
+import { AddActivity } from "./add-activity";
 import { getCurrentUser } from "@/lib/session";
 
 // "Get my coach's review" (generateWeeklyReview) can be invoked from this page
@@ -18,7 +21,7 @@ export const maxDuration = 300;
 export default async function WorkoutTodayPage({
   searchParams,
 }: {
-  searchParams: { day?: string };
+  searchParams: { day?: string; add?: string };
 }) {
   const supabase = createClient();
   const user = await getCurrentUser();
@@ -28,9 +31,12 @@ export default async function WorkoutTodayPage({
   const status = await getWeekStatus(supabase, user.id, tz);
   if (!status)
     return (
-      <p className="glass p-4 text-sm font-medium text-muted">
-        No active program yet.
-      </p>
+      <div className="space-y-3">
+        <p className="glass p-4 text-sm font-medium text-muted">
+          No active program yet.
+        </p>
+        <AddActivity today={todayLocal(tz)} startOpen={searchParams.add === "activity"} />
+      </div>
     );
 
   const dayList = status.days;
@@ -67,34 +73,73 @@ export default async function WorkoutTodayPage({
     if (vals.length) avgRpe = Math.round((vals.reduce((x, y) => x + y, 0) / vals.length) * 10) / 10;
   }
 
-  const { data: pe } = await supabase
-    .from("program_exercises")
-    .select(
-      "id, exercise_id, position, prescribed_sets, rep_scheme, suggested_load_value, suggested_load_type, target_rpe_low, target_rpe_high, coach_note"
-    )
-    .eq("user_id", user.id)
-    .eq("program_day_id", day.id)
-    .order("position", { ascending: true });
+  // This week's list for the day ("This week only" edits win over the plan),
+  // plus At home today + home equipment.
+  const today = todayLocal(tz);
+  const [dayPlan, { data: homeRow }, { data: profileRow }] = await Promise.all([
+    getDayPlan(supabase, user.id, status.program.id, day.id, status.weekStartedOn),
+    supabase
+      .from("at_home_days")
+      .select("local_date")
+      .eq("user_id", user.id)
+      .eq("local_date", today)
+      .maybeSingle(),
+    supabase.from("profiles").select("home_equipment").eq("id", user.id).maybeSingle(),
+  ]);
+  const atHome = !!homeRow;
+  const equipmentSet = profileRow?.home_equipment != null;
+  const equipment = normalizeEquipment(profileRow?.home_equipment);
 
-  const { data: exRows } = await supabase
-    .from("exercises")
-    .select("id, name")
-    .eq("user_id", user.id);
-  const nameById = new Map<string, string>();
-  for (const e of exRows ?? []) nameById.set(e.id as string, e.name as string);
-
-  const exercises: LogExercise[] = (pe ?? []).map((p) => ({
-    programExerciseId: p.id as string,
-    exerciseId: p.exercise_id as string,
-    name: nameById.get(p.exercise_id as string) ?? "Exercise",
-    prescribed_sets: p.prescribed_sets as number | null,
-    rep_scheme: p.rep_scheme as string | null,
-    suggested_load_value: p.suggested_load_value as number | null,
-    suggested_load_type: p.suggested_load_type as LoadType | null,
-    target_rpe_low: p.target_rpe_low as number | null,
-    target_rpe_high: p.target_rpe_high as number | null,
-    coach_note: p.coach_note as string | null,
-  }));
+  let swappedCount = 0;
+  const exercises: LogExercise[] = dayPlan.items.map((it) => {
+    const gym: LogExercise = {
+      rowKey: it.key,
+      exerciseId: it.exercise_id,
+      name: it.name,
+      category: it.category,
+      activity: it.activity,
+      prescribed_sets: it.prescribed_sets,
+      rep_scheme: it.rep_scheme,
+      suggested_load_value: it.suggested_load_value,
+      suggested_load_type: it.suggested_load_type,
+      target_rpe_low: it.target_rpe_low,
+      target_rpe_high: it.target_rpe_high,
+      coach_note: it.coach_note,
+      subline: it.activity
+        ? "Extra activity"
+        : it.swapped_from
+          ? `This week instead of ${it.swapped_from}`
+          : dayPlan.weekEdit && !it.source_id
+            ? "Added this week"
+            : null,
+    };
+    if (!atHome || it.activity) return gym;
+    const h = homeSwapFor(
+      { name: it.name, category: it.category, load_value: it.suggested_load_value, load_type: it.suggested_load_type },
+      equipment
+    );
+    if (h.same)
+      return {
+        ...gym,
+        suggested_load_value: h.load_value,
+        subline: `Same as gym${h.tip ? ` · ${h.tip}` : ""}`,
+      };
+    swappedCount++;
+    return {
+      ...gym,
+      rowKey: `home:${it.key}`,
+      exerciseId: "", // found / added by name when the session is saved
+      name: h.name,
+      category: h.category,
+      suggested_load_value: h.load_value,
+      suggested_load_type: h.load_type,
+      coach_note: null, // the gym exercise's note doesn't apply
+      homeFor: it.name,
+      homeTip: h.tip,
+      subline: null,
+    };
+  });
+  const dayName = `Day ${day.day_index}${day.label ? ` · ${day.label}` : ""}`;
 
   const nextLabel = status.nextDay
     ? `Day ${status.nextDay.day_index}`
@@ -168,13 +213,36 @@ export default async function WorkoutTodayPage({
                   ? "off"
                   : null,
         }))}
+        aside={
+          day.type !== "rest" ? (
+            <EditDay
+              dayId={day.id}
+              dayName={dayName}
+              items={dayPlan.items}
+              weekEdit={dayPlan.weekEdit}
+              weekEnded={status.weekEnded}
+            />
+          ) : null
+        }
       />
 
-      <div className="flex items-baseline justify-between px-1 pt-1">
-        <h2 className="font-display text-lg font-bold tracking-[-0.01em] text-ink">
-          Day {day.day_index}
-          {day.label ? ` · ${day.label}` : ""}
+      {day.type !== "rest" && dayPlan.items.some((it) => !it.activity) ? (
+        <AtHome
+          on={atHome}
+          equipment={equipment}
+          equipmentSet={equipmentSet}
+          swappedCount={swappedCount}
+          dayName={dayName}
+          items={dayPlan.items}
+        />
+      ) : null}
+
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+        <h2 className="px-1 font-display text-lg font-bold tracking-[-0.01em] text-ink">
+          {dayName}
+          {dayPlan.weekEdit ? <span className="mark mark-amber ml-2 align-middle font-sans">Changed this week</span> : null}
         </h2>
+        <AddActivity today={today} startOpen={searchParams.add === "activity"} />
       </div>
 
       {day.type !== "rest" && day.inWeek && !day.done && !status.weekEnded ? (
@@ -198,6 +266,7 @@ export default async function WorkoutTodayPage({
           dayId={day.id}
           type={day.type}
           exercises={exercises}
+          home={atHome}
         />
       )}
     </div>

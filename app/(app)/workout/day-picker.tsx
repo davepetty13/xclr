@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
 export type DayOption = {
@@ -17,7 +18,15 @@ const STATUS_TEXT: Record<NonNullable<DayOption["status"]>, string> = {
 
 // Compact day selector: a dropdown instead of a row of chips, with the chosen
 // day's status beside it (Done / Skipped; nothing when not done yet).
-export function DayPicker({ days, selectedId }: { days: DayOption[]; selectedId: string }) {
+export function DayPicker({
+  days,
+  selectedId,
+  aside,
+}: {
+  days: DayOption[];
+  selectedId: string;
+  aside?: ReactNode; // e.g. the "Edit day…" button
+}) {
   const router = useRouter();
   const selected = days.find((d) => d.id === selectedId) ?? days[0];
   return (
@@ -42,6 +51,7 @@ export function DayPicker({ days, selectedId }: { days: DayOption[]; selectedId:
       ) : selected?.status === "skipped" ? (
         <span className="mark mark-neutral shrink-0">Skipped</span>
       ) : null}
+      {aside}
     </div>
   );
 }

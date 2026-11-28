@@ -6,7 +6,11 @@ import { AI_BUDGET_SECONDS } from "@/lib/anthropic";
 import { deadlineAfter } from "@/lib/ai-call";
 import { getActiveProgram, getWeekStatus } from "@/lib/programs";
 import { getUserTz } from "@/lib/goal-change";
-import { addDays, localDate, localDayStartISO, todayLocal } from "@/lib/time";
+import { addDays, localDate, localDayStartISO, noonOnLocalDateISO, todayLocal } from "@/lib/time";
+import { resolveExerciseIds } from "@/lib/exercises";
+import { ACTIVITY_DAYS_BACK, cleanName, describeDayEdit, parseDayEdits } from "@/lib/day-edits";
+import { asCategory, guessCategory } from "@/lib/home-swaps";
+import type { LoadType } from "@/lib/program-schema";
 import {
   PROPOSAL_JSON_SCHEMA,
   validateProposal,
@@ -23,7 +27,9 @@ import {
 export type SimpleResult = { ok: true } | { ok: false; error: string };
 
 export type SetInput = {
-  exercise_id: string;
+  exercise_id: string; // "" when the exercise must be found / added by name
+  exercise_name?: string | null; // a home swap (At home today) or typed exercise
+  category?: string | null;
   set_index: number;
   load_value: number | null;
   load_type: string | null;
@@ -118,10 +124,11 @@ export async function logSession(
   const sessionType = typeof type === "string" ? type.slice(0, 40) : null;
 
   // Only keep sets the user actually logged (reps or load present).
-  const real = (sets ?? []).filter(
-    (s) => s.exercise_id && (s.reps != null || s.load_value != null)
+  const logged = (Array.isArray(sets) ? sets : []).filter(
+    (s) => s && (s.exercise_id || s.exercise_name) && (s.reps != null || s.load_value != null)
   );
-  if (!real.length && !note)
+  if (logged.length > 300) return { ok: false, error: "That's a lot of sets. Split it into two sessions." };
+  if (!logged.length && !note)
     return { ok: false, error: "Log at least one set first." };
 
   // The day must belong to the caller's ACTIVE program.
@@ -135,6 +142,29 @@ export async function logSession(
     .eq("program_id", program.id)
     .maybeSingle();
   if (!dayRow) return { ok: false, error: "That day isn't in your current program. Refresh and try again." };
+
+  // Home swaps arrive by name: find (or add) them in the user's own list, so
+  // each set records the exercise actually performed.
+  const wanted = new Map<string, { name: string; category: string | null }>();
+  for (const s of logged) {
+    if (s.exercise_id) continue;
+    const n = cleanName(s.exercise_name);
+    if (n && !wanted.has(n.toLowerCase()))
+      wanted.set(n.toLowerCase(), { name: n, category: asCategory(s.category) ?? guessCategory(n) });
+  }
+  if (wanted.size > 30) return { ok: false, error: "Too many different exercises in one session." };
+  const idByLower = wanted.size
+    ? await resolveExerciseIds(supabase, user.id, Array.from(wanted.values()))
+    : new Map<string, string>();
+  const real = logged
+    .map((s) =>
+      s.exercise_id
+        ? s
+        : { ...s, exercise_id: idByLower.get(cleanName(s.exercise_name)?.toLowerCase() ?? "") ?? "" }
+    )
+    .filter((s) => typeof s.exercise_id === "string" && s.exercise_id !== "");
+  if (logged.length && !real.length)
+    return { ok: false, error: "Couldn't match those exercises. Refresh and try again." };
 
   // Sets may only reference the caller's own exercises; numbers are clamped.
   const { data: ownEx } = await supabase
@@ -242,7 +272,7 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
   const { data: progEx } = await supabase
     .from("program_exercises")
     .select(
-      "id, exercise_id, prescribed_sets, rep_scheme, rep_high, target_rpe_high, suggested_load_value, suggested_load_type, coach_note"
+      "id, program_day_id, exercise_id, prescribed_sets, rep_scheme, rep_high, target_rpe_high, suggested_load_value, suggested_load_type, coach_note"
     )
     .eq("user_id", user.id)
     .in("program_day_id", dayIds);
@@ -289,9 +319,55 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
   if (!sessionIds.length && !skipped.length)
     return { ok: false, error: "No sessions logged this week yet. Log a workout first." };
 
+  // "This week only" day edits, days trained at home, and extra activities —
+  // the user's own changes, so the coach doesn't read them as missed work.
+  let homeQ = supabase
+    .from("at_home_days")
+    .select("local_date")
+    .eq("user_id", user.id)
+    .gte("local_date", fromDate);
+  if (toDate) homeQ = homeQ.lt("local_date", toDate);
+  let actQ = supabase
+    .from("workout_sessions")
+    .select("id, duration_min, effort, kcal")
+    .eq("user_id", user.id)
+    .eq("type", "activity")
+    .gte("performed_at", fromISO);
+  if (toISO) actQ = actQ.lt("performed_at", toISO);
+  const [{ data: editRows }, { data: homeRows }, { data: actRows }] = await Promise.all([
+    supabase
+      .from("day_edits")
+      .select("program_day_id, edits")
+      .eq("user_id", user.id)
+      .eq("program_id", program.id)
+      .eq("week_started_on", fromDate),
+    homeQ,
+    actQ,
+  ]);
+  const edited = (editRows ?? [])
+    .map((row) => {
+      const dayId = row.program_day_id as string;
+      const plan = progEx
+        .filter((pe) => pe.program_day_id === dayId)
+        .map((pe) => ({
+          id: pe.id as string,
+          exercise_id: pe.exercise_id as string,
+          name: nameById.get(pe.exercise_id as string) ?? "Exercise",
+          prescribed_sets: pe.prescribed_sets as number | null,
+          rep_scheme: pe.rep_scheme as string | null,
+          suggested_load_value: pe.suggested_load_value == null ? null : Number(pe.suggested_load_value),
+          suggested_load_type: (pe.suggested_load_type as LoadType | null) ?? null,
+        }));
+      return {
+        day: labelById.get(dayId) ?? "A training day",
+        changes: describeDayEdit(parseDayEdits(row.edits), plan),
+      };
+    })
+    .filter((e) => e.changes.length > 0);
+
   const { data: setLogs } = await supabase
     .from("set_logs")
-    .select("exercise_id, actual_load_value, actual_reps, actual_rpe")
+    .select("session_id, exercise_id, actual_load_value, actual_load_type, actual_reps, actual_rpe")
     .eq("user_id", user.id)
     .in("session_id", sessionIds);
   const actualsByEx = new Map<
@@ -325,6 +401,40 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
       actuals: actualsByEx.get(pe.exercise_id as string) ?? [],
     };
   });
+
+  // Extra activities (Badminton 60 min…): name from their one set row.
+  const activityIds = new Set((actRows ?? []).map((a) => a.id as string));
+  const activityName = new Map<string, string>();
+  for (const s of setLogs ?? [])
+    if (activityIds.has(s.session_id as string))
+      activityName.set(s.session_id as string, nameById.get(s.exercise_id as string) ?? "Activity");
+  const activities = (actRows ?? []).map((a) => ({
+    name: activityName.get(a.id as string) ?? "Activity",
+    minutes: (a.duration_min as number | null) ?? null,
+    effort: (a.effort as string | null) ?? null,
+    kcal: (a.kcal as number | null) ?? null,
+  }));
+
+  // Sets logged on exercises outside the program (home swaps, this-week
+  // swaps), so that work isn't invisible to the coach.
+  const planExIds = new Set(progEx.map((pe) => pe.exercise_id as string));
+  const otherByEx = new Map<string, { load_value: number | null; load_type: string | null; reps: number | null; rpe: number | null }[]>();
+  for (const s of setLogs ?? []) {
+    const exId = s.exercise_id as string;
+    if (planExIds.has(exId) || activityIds.has(s.session_id as string)) continue;
+    const list = otherByEx.get(exId) ?? [];
+    list.push({
+      load_value: s.actual_load_value as number | null,
+      load_type: (s.actual_load_type as string | null) ?? null,
+      reps: s.actual_reps as number | null,
+      rpe: s.actual_rpe as number | null,
+    });
+    otherByEx.set(exId, list);
+  }
+  const otherLogged = Array.from(otherByEx.entries()).map(([exId, actuals]) => ({
+    name: nameById.get(exId) ?? "Exercise",
+    actuals,
+  }));
 
   const notes = (sessRows ?? [])
     .map((n) => (n.my_note as string | null)?.trim())
@@ -362,6 +472,10 @@ export async function generateWeeklyReview(reviewFrom?: string): Promise<SimpleR
     exercises,
     notes,
     skipped,
+    edited,
+    home_days: (homeRows ?? []).length,
+    other_logged: otherLogged,
+    activities,
     avg_sleep_min: avgSleep,
     weight_trend: weightTrend,
   };
@@ -582,6 +696,87 @@ export async function undoSkip(skipId: string): Promise<SimpleResult> {
   if (error) {
     console.error(`[undoSkip] ${error.message}`);
     return { ok: false, error: "Couldn't undo the skip. Try again." };
+  }
+  return { ok: true };
+}
+
+// ── Add an extra activity ───────────────────────────────────────────────────
+// Badminton, a run, a home workout… logged as its own session (type
+// 'activity', no program day, so no day is marked done) with one set row
+// holding the minutes. kcal is only what the user typed — never estimated.
+
+export type ActivityInput = {
+  name: string;
+  minutes: number;
+  effort: "easy" | "moderate" | "hard";
+  kcal: number | null;
+  note: string;
+  date: string; // local YYYY-MM-DD
+};
+
+export async function logActivity(input: ActivityInput): Promise<SimpleResult> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "You're signed out." };
+  if (!input || typeof input !== "object") return { ok: false, error: "Nothing to save." };
+
+  const name = cleanName(input.name, 60);
+  if (!name) return { ok: false, error: "Pick or type the activity." };
+  const minutes = typeof input.minutes === "number" && Number.isFinite(input.minutes) ? Math.round(input.minutes) : NaN;
+  if (!(minutes >= 1 && minutes <= 1440)) return { ok: false, error: "Minutes should be between 1 and 1440." };
+  const effort = input.effort === "easy" || input.effort === "moderate" || input.effort === "hard" ? input.effort : null;
+  if (!effort) return { ok: false, error: "Pick how hard it felt." };
+  let kcal: number | null = null;
+  if (input.kcal != null) {
+    if (typeof input.kcal !== "number" || !Number.isFinite(input.kcal) || input.kcal < 0 || input.kcal > 10000)
+      return { ok: false, error: "Calories should be between 0 and 10000, or left blank." };
+    kcal = Math.round(input.kcal);
+  }
+  const note =
+    typeof input.note === "string" ? input.note.replace(/[\r\n\t]+/g, " ").replace(/"/g, "'").trim().slice(0, 1000) : "";
+
+  const tz = await getUserTz(supabase, user.id);
+  const today = todayLocal(tz);
+  const date = typeof input.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.date) ? input.date : null;
+  if (!date || date > today || date < addDays(today, -ACTIVITY_DAYS_BACK))
+    return { ok: false, error: `Pick today or a day in the last ${ACTIVITY_DAYS_BACK} days.` };
+
+  const category = guessCategory(name) ?? "cardio";
+  const idByLower = await resolveExerciseIds(supabase, user.id, [{ name, category }]);
+  const exerciseId = idByLower.get(name.toLowerCase());
+  if (!exerciseId) return { ok: false, error: "Couldn't save that activity. Try again." };
+
+  const { data: session, error: sErr } = await supabase
+    .from("workout_sessions")
+    .insert({
+      user_id: user.id,
+      program_day_id: null,
+      type: "activity",
+      my_note: note || null,
+      performed_at: date === today ? new Date().toISOString() : noonOnLocalDateISO(date, tz),
+      duration_min: minutes,
+      effort,
+      kcal,
+    })
+    .select("id")
+    .single();
+  if (sErr || !session) {
+    console.error(`[logActivity] ${sErr?.message}`);
+    return { ok: false, error: "Couldn't save that activity. Try again." };
+  }
+  const { error: setErr } = await supabase.from("set_logs").insert({
+    user_id: user.id,
+    session_id: session.id as string,
+    exercise_id: exerciseId,
+    set_index: 1,
+    actual_load_value: minutes,
+    actual_load_type: "time_min",
+  });
+  if (setErr) {
+    await supabase.from("workout_sessions").delete().eq("id", session.id as string).eq("user_id", user.id);
+    return { ok: false, error: "Couldn't save that activity. Nothing was logged — try again." };
   }
   return { ok: true };
 }
