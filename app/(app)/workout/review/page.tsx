@@ -5,6 +5,8 @@ import { getUserTz } from "@/lib/goal-change";
 import { localDayStartISO, localDate, prettyDate } from "@/lib/time";
 import { countPRs, type PrSet } from "@/lib/training";
 import { getCurrentUser } from "@/lib/session";
+import { loadShareContext, weekShare } from "@/lib/share-data";
+import { ShareButton } from "@/components/app/share-sheet";
 import {
   WeekReview,
   type PendingProposal,
@@ -173,13 +175,26 @@ export default async function WorkoutReviewPage() {
     };
   }
 
+  // "Share my week": card numbers from this week's own rows (plain data).
+  const share = status ? weekShare(await loadShareContext(supabase, user.id)) : null;
+
   return (
-    <WeekReview
-      proposal={proposal}
-      week={status?.week ?? 1}
-      weekComplete={status?.weekComplete ?? false}
-      summary={summary}
-      loadError={loadError}
-    />
+    <div className="space-y-3">
+      <WeekReview
+        proposal={proposal}
+        week={status?.week ?? 1}
+        weekComplete={status?.weekComplete ?? false}
+        summary={summary}
+        loadError={loadError}
+      />
+      {share ? (
+        <ShareButton
+          bundle={share}
+          initialTab="week"
+          label="Share my week"
+          className="btn-secondary w-full text-sm"
+        />
+      ) : null}
+    </div>
   );
 }

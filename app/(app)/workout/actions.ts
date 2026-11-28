@@ -108,7 +108,7 @@ export async function logSession(
   type: string | null,
   sets: SetInput[],
   myNote: string
-): Promise<SimpleResult> {
+): Promise<{ ok: true; sessionId: string } | { ok: false; error: string }> {
   const supabase = createClient();
   const {
     data: { user },
@@ -194,7 +194,7 @@ export async function logSession(
       return { ok: false, error: "Couldn't save your sets. Nothing was logged — try again." };
     }
   }
-  return { ok: true };
+  return { ok: true, sessionId: session.id as string };
 }
 
 // Generate the week's progression proposal (Doc 02 §4). Never auto-applies —

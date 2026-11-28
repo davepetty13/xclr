@@ -7,7 +7,7 @@ import "./globals.css";
 // --font-serif, so existing `font-serif` classes switch over automatically.
 const sora = Sora({
   subsets: ["latin"],
-  weight: ["600", "700"],
+  weight: ["600", "700", "800"], // 800: share-card headlines (v3.8)
   variable: "--font-display",
   display: "swap",
 });

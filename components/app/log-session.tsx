@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { logSession, type SetInput } from "@/app/(app)/workout/actions";
 import { formatLoad, loadUnitLabel, type LoadType } from "@/lib/program-schema";
+import { getSessionShare } from "@/app/(app)/workout/share-actions";
+import { ShareSheet } from "@/components/app/share-sheet";
+import type { ShareBundle } from "@/lib/share-cards";
 
 export type LogExercise = {
   programExerciseId: string;
@@ -38,6 +41,17 @@ export function LogSession({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Share card for the session just logged (numbers re-read from the saved rows).
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [shareBundle, setShareBundle] = useState<ShareBundle | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const shareBtnRef = useRef<HTMLButtonElement>(null);
+  const closeShare = useCallback(() => {
+    setShareOpen(false);
+    shareBtnRef.current?.focus();
+  }, []);
   // Which exercise has the logging UI open, and which set row is being edited.
   // Both are part of the draft, so coming back to Train reopens where you were.
   const [active, setActive] = useState(0);
@@ -135,6 +149,7 @@ export function LogSession({
       } catch {
         // non-fatal
       }
+      setSessionId(r.sessionId);
       setDone(true);
       router.refresh();
     } else {
@@ -142,13 +157,55 @@ export function LogSession({
     }
   }
 
+  async function openShare() {
+    if (shareBundle) {
+      setShareOpen(true);
+      return;
+    }
+    if (!sessionId) return;
+    setShareBusy(true);
+    setShareError(null);
+    try {
+      const r = await getSessionShare(sessionId);
+      if (r.ok) {
+        setShareBundle(r.bundle);
+        setShareOpen(true);
+      } else setShareError(r.error);
+    } catch {
+      setShareError("Couldn't reach the server. Try again.");
+    }
+    setShareBusy(false);
+  }
+
   if (done) {
     return (
-      <div className="rounded-card bg-green-soft p-5 text-center shadow-card">
-        <p className="font-display text-xl font-bold text-green">Session logged</p>
-        <p className="mt-1 text-sm font-medium text-muted">
-          Nice work. It&apos;s in your history and feeds next week&apos;s review.
-        </p>
+      <div className="space-y-3">
+        <div className="rounded-card bg-green-soft p-5 text-center shadow-card">
+          <p className="font-display text-xl font-bold text-green">Session logged</p>
+          <p className="mt-1 text-sm font-medium text-muted">
+            Nice work. It&apos;s in your history and feeds next week&apos;s review.
+          </p>
+        </div>
+        {sessionId ? (
+          <button
+            ref={shareBtnRef}
+            type="button"
+            aria-haspopup="dialog"
+            onClick={() => void openShare()}
+            disabled={shareBusy}
+            className="btn-primary w-full text-sm"
+          >
+            {shareBusy ? "Getting your numbers…" : "Share this session"}
+          </button>
+        ) : null}
+        {shareError ? (
+          <p role="alert" className="px-1 text-sm font-medium text-ink">
+            {shareError}
+          </p>
+        ) : null}
+        {shareOpen && shareBundle ? (
+          <ShareSheet bundle={shareBundle} initialTab="session" onClose={closeShare} />
+        ) : null}
       </div>
     );
   }

@@ -3,6 +3,8 @@ import { getUserTz } from "@/lib/goal-change";
 import { epley1RM } from "@/lib/training";
 import { formatLoad, type LoadType } from "@/lib/program-schema";
 import { getCurrentUser } from "@/lib/session";
+import { loadShareContext, sessionShare } from "@/lib/share-data";
+import { ShareButton } from "@/components/app/share-sheet";
 
 export default async function WorkoutHistoryPage() {
   const supabase = createClient();
@@ -17,6 +19,8 @@ export default async function WorkoutHistoryPage() {
     .order("performed_at", { ascending: false })
     .limit(20);
   const sessionList = sessions ?? [];
+  // Share-card numbers for each listed session (plain data to the client).
+  const shareCtx = sessionList.length ? await loadShareContext(supabase, user.id) : null;
 
   const { data: allSets } = await supabase
     .from("set_logs")
@@ -93,6 +97,7 @@ export default async function WorkoutHistoryPage() {
           undefined,
           { weekday: "short", month: "short", day: "numeric", timeZone: tz }
         );
+        const share = shareCtx ? sessionShare(shareCtx, sess.id as string) : null;
         return (
           <section key={sess.id as string} className="glass px-4 py-3.5">
             <div className="flex items-baseline justify-between gap-3">
@@ -138,6 +143,17 @@ export default async function WorkoutHistoryPage() {
               <p className="mt-2 text-[13px] font-medium text-muted">
                 &ldquo;{sess.my_note as string}&rdquo;
               </p>
+            ) : null}
+            {share ? (
+              <div className="mt-2 flex justify-end">
+                <ShareButton
+                  bundle={share}
+                  initialTab="session"
+                  label="Share"
+                  ariaLabel={`Share ${(sess.type as string | null) ?? "session"} on ${date}`}
+                  className="btn-secondary min-h-[44px] px-3 text-[13px]"
+                />
+              </div>
             ) : null}
           </section>
         );
