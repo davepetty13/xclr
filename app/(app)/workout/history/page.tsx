@@ -129,7 +129,7 @@ export default async function WorkoutHistoryPage() {
               {volume > 0 ? (
                 <span className="shrink-0 text-xs font-medium text-muted">
                   <span className="tnum font-display text-sm font-bold text-ink">
-                    {Math.round(volume)}
+                    {Math.round(volume).toLocaleString("en-US")}
                   </span>{" "}
                   kg vol
                 </span>
@@ -149,25 +149,36 @@ export default async function WorkoutHistoryPage() {
             <ul className="mt-1">
               {Array.from(byEx.entries()).map(([exId, rows]) => {
                 const isPr = prPair.has(`${sess.id as string}:${exId}`);
-                const summary = rows
-                  .map((r) => {
-                    const load = formatLoad(r.load, r.type as LoadType | null);
-                    return `${load}${r.reps != null ? ` × ${r.reps}` : ""}`;
+                // Group repeated sets: "3 × 10 · 15 kg/side" instead of the
+                // same set written out three times.
+                const groups: { load: string; reps: number | null; n: number }[] = [];
+                for (const r of rows) {
+                  const load = formatLoad(r.load, r.type as LoadType | null).trim();
+                  const last = groups[groups.length - 1];
+                  if (last && last.load === load && last.reps === r.reps) last.n += 1;
+                  else groups.push({ load, reps: r.reps, n: 1 });
+                }
+                const summary = groups
+                  .map((g) => {
+                    const reps = g.reps != null ? `${g.n > 1 ? `${g.n} × ` : ""}${g.reps}` : g.n > 1 ? `${g.n} sets` : "";
+                    return [reps, g.load].filter(Boolean).join(" · ");
                   })
                   .filter((x) => x.trim())
                   .join(", ");
                 return (
                   <li
                     key={exId}
-                    className="flex min-h-[40px] items-center justify-between gap-3 border-b border-hairline py-1.5 last:border-b-0"
+                    className="flex min-h-[40px] flex-col justify-center gap-0.5 border-b border-hairline py-2 last:border-b-0"
                   >
-                    <span className="flex items-center gap-1.5 text-sm font-semibold text-ink">
-                      {nameById.get(exId) ?? "Exercise"}
-                      {isPr ? <span className="mark mark-green">PR</span> : null}
+                    <span className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-ink">
+                      <span className="min-w-0">{nameById.get(exId) ?? "Exercise"}</span>
+                      {isPr ? <span className="mark mark-green shrink-0">PR</span> : null}
                     </span>
-                    <span className="tnum shrink-0 text-right font-display text-[13px] font-semibold text-ink">
-                      {summary}
-                    </span>
+                    {summary ? (
+                      <span className="tnum min-w-0 break-words font-display text-[13px] font-semibold text-muted">
+                        {summary}
+                      </span>
+                    ) : null}
                   </li>
                 );
               })}
